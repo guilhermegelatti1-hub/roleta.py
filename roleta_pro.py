@@ -11,6 +11,7 @@ import math
 # ==========================================
 class RoletaQuantEngine:
     def __init__(self):
+        # A roda física real da Roleta Europeia
         self.RODA = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 
                      5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
         self.VERMELHOS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
@@ -44,7 +45,6 @@ class RoletaQuantEngine:
         transicoes = {"Vermelho": {"Vermelho": 0, "Preto": 0, "Verde": 0},
                       "Preto": {"Vermelho": 0, "Preto": 0, "Verde": 0},
                       "Verde": {"Vermelho": 0, "Preto": 0, "Verde": 0}}
-        
         cores = [self.classificar(n)["Cor"] for n in historico]
         for i in range(len(cores)-1):
             atual = cores[i]
@@ -59,15 +59,41 @@ class RoletaQuantEngine:
         if not historico: return "Nenhum", 0
         hist_inv = historico[::-1]
         cores = [self.classificar(n)["Cor"] for n in hist_inv]
-        
         atraso_verm = next((i for i, cor in enumerate(cores) if cor == "Vermelho"), len(cores))
         atraso_preto = next((i for i, cor in enumerate(cores) if cor == "Preto"), len(cores))
-        
-        if atraso_verm > atraso_preto:
-            return "Vermelho", atraso_verm
-        elif atraso_preto > atraso_verm:
-            return "Preto", atraso_preto
+        if atraso_verm > atraso_preto: return "Vermelho", atraso_verm
+        elif atraso_preto > atraso_verm: return "Preto", atraso_preto
         return "Nenhum", 0
+
+    # NOVO MÓDULO: CÁLCULO DE FÍSICA E SALTOS NA RODA
+    def calcular_saltos(self, historico):
+        """Calcula a distância (sentido horário) entre jogadas consecutivas no cilindro físico"""
+        if len(historico) < 2: return []
+        saltos = []
+        for i in range(len(historico)-1):
+            n_atual = int(historico[i])
+            n_seguinte = int(historico[i+1])
+            idx_atual = self.RODA.index(n_atual)
+            idx_seguinte = self.RODA.index(n_seguinte)
+            
+            # Cálculo da distância circular
+            distancia = (idx_seguinte - idx_atual) % 37
+            saltos.append(distancia)
+        return saltos
+
+    def projetar_alvo(self, ultimo_numero, salto_predito):
+        """Calcula onde a bola vai cair com base no salto previsto"""
+        idx_atual = self.RODA.index(int(ultimo_numero))
+        idx_alvo = (idx_atual + salto_predito) % 37
+        alvo_principal = self.RODA[idx_alvo]
+        
+        # Pega os 2 vizinhos de cada lado para criar uma "Zona de Aterrizagem"
+        zona = []
+        for i in range(-2, 3):
+            idx_vizinho = (idx_alvo + i) % 37
+            zona.append(self.RODA[idx_vizinho])
+            
+        return alvo_principal, zona
 
 # ==========================================
 # 2. INICIALIZAÇÃO DA APP
@@ -79,6 +105,7 @@ st.markdown("""
     .stMetric { background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid #00E676;}
     .radar-box { padding: 15px; border-radius: 10px; margin-bottom: 10px; color: white; text-align: center; font-weight: bold;}
     .pista-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #1f4037 0%, #99f2c8 100%); color: black; text-align: center; font-weight: bold; border: 2px solid white;}
+    .alvo-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #FF4136 0%, #FF851B 100%); color: white; text-align: center; font-weight: bold; border: 2px solid white;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -91,27 +118,16 @@ engine = RoletaQuantEngine()
 # 3. BARRA LATERAL (Inserção Ultra-Rápida)
 # ==========================================
 def registar_jogada():
-    """Função Callback que corre automaticamente ao premir ENTER"""
     num = st.session_state.input_roleta
     if num is not None:
         st.session_state.historico_quant.append(int(num))
-        # Limpa a caixa instantaneamente para a próxima jogada
         st.session_state.input_roleta = None
 
 with st.sidebar:
     st.title("⚙️ Inserir Dados")
     st.write("Digita o número e prime **ENTER**.")
     
-    # O formulário foi removido. Usamos a chave 'input_roleta' ligada ao on_change!
-    st.number_input(
-        "Número Sorteado (0-36):", 
-        min_value=0, 
-        max_value=36, 
-        step=1, 
-        value=None,
-        key="input_roleta",
-        on_change=registar_jogada
-    )
+    st.number_input("Número Sorteado (0-36):", min_value=0, max_value=36, step=1, value=None, key="input_roleta", on_change=registar_jogada)
             
     st.write("---")
     if st.button("🚨 Nova Sessão", type="primary", use_container_width=True):
@@ -125,57 +141,68 @@ historico = st.session_state.historico_quant
 n_jogadas = len(historico)
 LIMITE_CALIBRACAO = 25 
 
-st.title("🎯 Radar Estatístico Visual")
+st.title("🎯 Radar Estatístico & Físico")
 
 if n_jogadas < LIMITE_CALIBRACAO:
-    st.warning("⚠️ O motor quantitativo precisa de volume estatístico para evitar falsos positivos.")
-    st.markdown(f"### Calibrando a Mesa: {n_jogadas} / {LIMITE_CALIBRACAO} jogadas")
-    
+    st.warning("⚠️ A recolher dados da física da mesa e memória muscular do croupier.")
+    st.markdown(f"### Calibrando: {n_jogadas} / {LIMITE_CALIBRACAO} jogadas")
     progresso = int((n_jogadas / LIMITE_CALIBRACAO) * 100)
-    st.progress(progresso, text=f"A recolher dados da Roda... {progresso}% concluído")
+    st.progress(progresso, text=f"{progresso}% concluído")
     
-    if n_jogadas > 0:
-        st.write(f"**Histórico temporário:** {historico}")
-        
-    st.info("Continua a inserir os números sorteados na barra lateral. O painel de diagnóstico será desbloqueado automaticamente.")
+    if n_jogadas > 0: st.write(f"**Histórico:** {historico}")
 else:
+    st.success(f"✅ Mesa Calibrada. {n_jogadas} jogadas em análise.")
+    
     # ---------------------------------------------------------
-    # ANÁLISE DA PISTA (RACETRACK) COM DESEMPATE
+    # NOVO: MÓDULO DE FÍSICA E ASSINATURA DO CROUPIER
     # ---------------------------------------------------------
-    st.success(f"✅ Calibração Concluída! Análise baseada em {n_jogadas} jogadas.")
+    st.markdown("### 🕵️‍♂️ Detetor de Assinatura do Croupier (Predição Física)")
+    
+    saltos = engine.calcular_saltos(historico)
+    contagem_saltos = Counter(saltos)
+    
+    if contagem_saltos:
+        salto_mais_comum = contagem_saltos.most_common(1)[0]
+        distancia_padrao = salto_mais_comum[0]
+        freq_salto = salto_mais_comum[1]
+        percentagem_salto = (freq_salto / len(saltos)) * 100
+        
+        ultimo_numero = historico[-1]
+        alvo, zona_aterrizagem = engine.projetar_alvo(ultimo_numero, distancia_padrao)
+        
+        col_f1, col_f2 = st.columns([1, 2])
+        with col_f1:
+            st.metric("Distância Padrão (Casas)", f"+{distancia_padrao} casas", f"Ocorre em {percentagem_salto:.1f}% dos giros")
+            st.write(f"O croupier tem a tendência física de lançar a bola para aterrar **{distancia_padrao} posições** à frente do último número sorteado.")
+        
+        with col_f2:
+            st.markdown(f"<div class='alvo-box'>🎯 ALVO PROJETADO PARA O PRÓXIMO GIRO: NÚMERO {alvo}<br>Zona de Aterrizagem sugerida (Vizinhos): {zona_aterrizagem}</div>", unsafe_allow_html=True)
+
+    st.divider()
+
+    # ---------------------------------------------------------
+    # ANÁLISE DA PISTA (RACETRACK)
+    # ---------------------------------------------------------
     st.markdown("### 🏎️ Análise da Pista (Racetrack)")
     
     setores = [engine.classificar_setor_pista(n) for n in historico]
     contagem_setores = Counter(setores)
-    
     max_ocorrencias = max(contagem_setores.values())
     setores_quentes = [setor for setor, qtd in contagem_setores.items() if qtd == max_ocorrencias]
     
-    if len(setores_quentes) > 1:
-        nome_setor_display = "EMPATE: " + " / ".join(setores_quentes)
-    else:
-        nome_setor_display = setores_quentes[0]
-        
+    nome_setor_display = "EMPATE: " + " / ".join(setores_quentes) if len(setores_quentes) > 1 else setores_quentes[0]
     prob_real = (max_ocorrencias / n_jogadas) * 100
     
     st.markdown(f"<div class='pista-box'>🔥 ZONA FÍSICA MAIS QUENTE: {nome_setor_display.upper()} 🔥<br>Lidera com {max_ocorrencias} bolas ({prob_real:.1f}% das rodadas)</div>", unsafe_allow_html=True)
-    
-    col_p1, col_p2, col_p3, col_p4 = st.columns(4)
-    col_p1.metric("Jeu Zéro (7 nms)", f"{contagem_setores.get('Jeu Zéro', 0)}x")
-    col_p2.metric("Voisins (10 nms)", f"{contagem_setores.get('Voisins', 0)}x")
-    col_p3.metric("Orphelins (8 nms)", f"{contagem_setores.get('Orphelins', 0)}x")
-    col_p4.metric("Tiers (12 nms)", f"{contagem_setores.get('Tiers', 0)}x")
 
     st.divider()
 
     # ---------------------------------------------------------
     # SUGESTÕES ESTATÍSTICAS
     # ---------------------------------------------------------
-    st.markdown("### 🧭 Probabilidades para o Próximo Giro")
+    st.markdown("### 🧭 Probabilidades Clássicas")
     
-    ultimo_numero = historico[-1]
     ultima_cor = engine.classificar(ultimo_numero)["Cor"]
-    
     df_markov = engine.cadeias_de_markov(historico)
     cor_atrasada, rodadas_atraso = engine.calcular_maior_atraso(historico)
     
@@ -196,52 +223,36 @@ else:
     with col_v2:
         if rodadas_atraso >= 3:
             st.markdown(f"<div class='radar-box' style='background-color: #FFC107; color: black;'>2. ESTATÍSTICA DE ATRASO<br>Apostar no {cor_atrasada}</div>", unsafe_allow_html=True)
-            st.warning(f"O **{cor_atrasada}** não sai há **{rodadas_atraso}** jogadas! A estatística sugere pressão para reequilíbrio.")
         else:
             st.markdown(f"<div class='radar-box' style='background-color: #555555;'>2. ESTATÍSTICA DE ATRASO<br>Sem anomalias</div>", unsafe_allow_html=True)
-            st.info("A mesa está a alternar normalmente. Sem atrasos severos nas cores.")
 
     with col_v3:
         duzias = [engine.classificar(n)["Duzia"] for n in historico if engine.classificar(n)["Duzia"] != "Zero"]
         if duzias:
             duzia_quente = Counter(duzias).most_common(1)[0][0]
             st.markdown(f"<div class='radar-box' style='background-color: #00E676; color: black;'>3. DÚZIA QUENTE<br>Apostar na {duzia_quente}</div>", unsafe_allow_html=True)
-            st.success(f"A **{duzia_quente}** dominou as saídas até agora. Sugestão de aposta de continuidade.")
 
     st.divider()
 
     # ---------------------------------------------------------
-    # ABAS DE ESTATÍSTICA PROFUNDA & VERIFICAÇÃO
+    # ABAS DE ESTATÍSTICA PROFUNDA & AUDITORIA
     # ---------------------------------------------------------
     st.markdown("### 📊 Detalhes Técnicos & Auditoria")
-    aba1, aba2, aba3 = st.tabs(["Gráfico da Pista", "Raio-X de Entradas", "Mapa de Transição"])
+    aba1, aba2, aba3 = st.tabs(["Histograma de Saltos (Física)", "Gráfico da Pista", "Mapa de Transição"])
     
     with aba1:
-        st.write("Distribuição real das jogadas ao longo do cilindro físico (Racetrack):")
-        fig_pista = px.pie(
-            names=list(contagem_setores.keys()), 
-            values=list(contagem_setores.values()), 
-            hole=0.4,
-            color=list(contagem_setores.keys()),
-            color_discrete_map={"Jeu Zéro": "#2ECC40", "Voisins": "#0074D9", "Orphelins": "#FF851B", "Tiers": "#B10DC9"}
-        )
-        fig_pista.update_layout(template="plotly_dark", title="Dominância de Setores")
-        st.plotly_chart(fig_pista, use_container_width=True)
+        st.write("Frequência de distâncias que a bola viaja no cilindro entre jogadas consecutivas:")
+        if saltos:
+            fig_saltos = px.histogram(x=saltos, nbins=37, labels={"x": "Distância (Nº de Casas)", "y": "Vezes que Aconteceu"})
+            fig_saltos.update_layout(template="plotly_dark")
+            st.plotly_chart(fig_saltos, use_container_width=True)
 
     with aba2:
-        st.markdown("**Verifica como o Sistema está a ler cada número inserido:**")
-        lista_raiox = []
-        for i, num in enumerate(historico):
-            info = engine.classificar(num)
-            setor = engine.classificar_setor_pista(num)
-            lista_raiox.append({
-                "Ordem": f"Jogada {i+1}", 
-                "Número": num, 
-                "Setor da Pista": setor, 
-                "Cor": info["Cor"], 
-                "Dúzia": info["Duzia"]
-            })
-        st.dataframe(pd.DataFrame(lista_raiox), use_container_width=True, hide_index=True)
+        fig_pista = px.pie(names=list(contagem_setores.keys()), values=list(contagem_setores.values()), hole=0.4,
+                           color=list(contagem_setores.keys()),
+                           color_discrete_map={"Jeu Zéro": "#2ECC40", "Voisins": "#0074D9", "Orphelins": "#FF851B", "Tiers": "#B10DC9"})
+        fig_pista.update_layout(template="plotly_dark", title="Dominância de Setores")
+        st.plotly_chart(fig_pista, use_container_width=True)
 
     with aba3:
         if not df_markov.empty:
