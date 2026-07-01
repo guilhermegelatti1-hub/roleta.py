@@ -13,9 +13,10 @@ VERMELHOS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
 
 def classificar_numero(n):
     if n == 0:
-        return "Verde", "Zero", "Zero", "Zero", "Zero"
+        return "Verde", "Zero", "Zero", "Zero", "Zero", "🟢"
     
     cor = "Vermelho" if n in VERMELHOS else "Preto"
+    emoji = "🔴" if cor == "Vermelho" else "⚫"
     paridade = "Par" if n % 2 == 0 else "Ímpar"
     metade = "Baixo (1-18)" if n <= 18 else "Alto (19-36)"
     
@@ -27,7 +28,7 @@ def classificar_numero(n):
     elif n % 3 == 2: coluna = "2ª Coluna"
     else: coluna = "3ª Coluna"
         
-    return cor, paridade, metade, duzia, coluna
+    return cor, paridade, metade, duzia, coluna, emoji
 
 def obter_vizinhos(n, qtd_vizinhos=2):
     idx = RODA_EUROPEIA.index(n)
@@ -39,31 +40,19 @@ def obter_vizinhos(n, qtd_vizinhos=2):
             vizinhos.append(RODA_EUROPEIA[vizinho_idx])
     return vizinhos
 
-# ==========================================
-# 2. FUNÇÃO AVANÇADA: CÁLCULO DE ATRASOS
-# ==========================================
 def calcular_atrasos(historico):
-    """Calcula há quantas rodadas uma determinada característica não aparece"""
     if not historico:
         return {}
     
     atrasos = {
         "Vermelho": 0, "Preto": 0,
         "Par": 0, "Ímpar": 0,
-        "1ª Dúzia": 0, "2ª Dúzia": 0, "3ª Dúzia": 0
+        "1ª Dúzia": 0, "2ª Dúzia": 0, "3ª Dúzia": 0,
+        "1ª Coluna": 0, "2ª Coluna": 0, "3ª Coluna": 0
     }
     
-    # Inverter o histórico para analisar do mais recente para o mais antigo
     historico_invertido = historico[::-1]
     
-    # Encontrar atrasos para Cores
-    for i, n in enumerate(historico_invertido):
-        cor, paridade, _, duzia, _ = classificar_numero(n)
-        
-        if i == 0: # O último número que saiu zera o atraso da sua categoria
-            continue
-            
-    # Lógica de varredura ativa de atraso
     categorias = {
         "Vermelho": lambda n: classificar_numero(n)[0] == "Vermelho",
         "Preto": lambda n: classificar_numero(n)[0] == "Preto",
@@ -72,9 +61,12 @@ def calcular_atrasos(historico):
         "1ª Dúzia": lambda n: classificar_numero(n)[3] == "1ª Dúzia",
         "2ª Dúzia": lambda n: classificar_numero(n)[3] == "2ª Dúzia",
         "3ª Dúzia": lambda n: classificar_numero(n)[3] == "3ª Dúzia",
+        "1ª Coluna": lambda n: classificar_numero(n)[4] == "1ª Coluna",
+        "2ª Coluna": lambda n: classificar_numero(n)[4] == "2ª Coluna",
+        "3ª Coluna": lambda n: classificar_numero(n)[4] == "3ª Coluna",
     }
     
-    for cat, condicao in categories.items():
+    for cat, condicao in categorias.items():
         contador = 0
         for n in historico_invertido:
             if condicao(n):
@@ -90,11 +82,11 @@ def calcular_atrasos(historico):
 if 'historico_pro' not in st.session_state:
     st.session_state.historico_pro = []
 
-st.set_page_config(page_title="Roleta Pro Dashboard", page_icon="📊", layout="wide")
-st.title("📊 Dashboard Analítico & Gráfico de Roleta")
+st.set_page_config(page_title="Roleta Premium", page_icon="🎰", layout="wide")
+st.title("🎰 Dashboard Premium: Estatísticas da Roleta")
 
 with st.container():
-    st.markdown("### 📥 Painel de Entrada de Dados")
+    st.markdown("### 📥 Registar Nova Jogada")
     col_input, col_btn, col_clear = st.columns([2, 1, 1])
     
     with col_input:
@@ -102,18 +94,18 @@ with st.container():
     with col_btn:
         st.write(" ")
         st.write(" ")
-        if st.button("➕ Registar Número", use_container_width=True):
+        if st.button("➕ Registar", use_container_width=True, type="primary"):
             st.session_state.historico_pro.append(novo_numero)
             st.rerun()
     with col_clear:
         st.write(" ")
         st.write(" ")
-        if st.button("🗑️ Reiniciar Sessão", use_container_width=True):
+        if st.button("🗑️ Reiniciar", use_container_width=True):
             st.session_state.historico_pro = []
             st.rerun()
 
 # ==========================================
-# 4. PROCESSAMENTO E EXIBIÇÃO GRÁFICA
+# 4. PROCESSAMENTO, MÉTRICAS E GRÁFICOS
 # ==========================================
 historico = st.session_state.historico_pro
 total = len(historico)
@@ -121,57 +113,87 @@ total = len(historico)
 st.divider()
 
 if total > 0:
-    st.markdown(f"**Análise Baseada em:** {total} jogadas | **Última sequência inserida:** {historico[-12:]}")
-    
+    # Preparar Dados
     dados_processados = [classificar_numero(n) for n in historico]
     cores = [d[0] for d in dados_processados]
+    emojis = [d[5] for d in dados_processados]
     duzias = [d[3] for d in dados_processados if d[3] != "Zero"]
     
-    aba1, aba2, aba3 = st.tabs(["📈 Gráficos & Tendências", "🎯 Monitor de Atrasos", "🎡 Setores do Cilindro"])
+    dict_atrasos = calcular_atrasos(historico)
+    max_atraso = max(dict_atrasos.values())
+    campo_max = [k for k, v in dict_atrasos.items() if v == max_atraso][0]
+    
+    # 4.1. MÉTRICAS DE TOPO (DASHBOARD)
+    met1, met2, met3 = st.columns(3)
+    met1.metric("Total de Rodadas", total)
+    met2.metric("Último Sorteado", f"{historico[-1]} {emojis[-1]}")
+    met3.metric("Maior Atraso Atual", f"{campo_max}", f"-{max_atraso} rodadas")
+    
+    # Histórico Visual
+    historico_visual = " ".join([f"{n}{e}" for n, e in zip(historico[-15:], emojis[-15:])])
+    st.markdown(f"**Últimos 15 números:** {historico_visual}")
+    
+    # 4.2. ABAS DE ANÁLISE
+    aba1, aba2, aba3, aba4 = st.tabs(["🔥 Quentes & Frios", "📈 Gráficos", "🎯 Atrasómetros", "🎡 Cilindro"])
     
     with aba1:
-        col_graf1, col_graf2 = st.columns(2)
+        st.markdown("#### Análise de Frequência de Números")
+        col_q, col_f = st.columns(2)
         
+        contagem_numeros = Counter(historico)
+        
+        with col_q:
+            st.success("🔥 **Números Quentes (Top 3)**")
+            quentes = contagem_numeros.most_common(3)
+            for n, qtd in quentes:
+                st.write(f"Número **{n}** ({classificar_numero(n)[0]}) — Saiu **{qtd}** vezes")
+                
+        with col_f:
+            st.error("❄️ **Números Frios (Menos Sorteados)**")
+            # Procura números que saíram menos ou ainda não saíram (0 vezes)
+            todos_numeros = set(range(37))
+            numeros_saidos = set(contagem_numeros.keys())
+            nao_saidos = list(todos_numeros - numeros_saidos)
+            
+            if nao_saidos:
+                st.write(f"Existem **{len(nao_saidos)}** números que ainda não saíram nesta sessão.")
+                st.write(f"Exemplos: {nao_saidos[:5]}")
+            else:
+                frios = contagem_numeros.most_common()[-3:]
+                for n, qtd in frios:
+                    st.write(f"Número **{n}** — Saiu apenas **{qtd}** vez(es)")
+
+    with aba2:
+        col_graf1, col_graf2 = st.columns(2)
         with col_graf1:
-            st.markdown("#### 🔴 Frequência de Cores (Gráfico)")
+            st.markdown("**Distribuição de Cores**")
             contagem_cores = Counter(cores)
-            # Criar um DataFrame estruturado para alimentar o gráfico do Streamlit
             df_chart_cores = pd.DataFrame({
                 "Vezes Sorteado": [contagem_cores.get("Vermelho", 0), contagem_cores.get("Preto", 0), contagem_cores.get("Verde", 0)]
             }, index=["Vermelho", "Preto", "Verde"])
-            st.bar_chart(df_chart_cores)
+            st.bar_chart(df_chart_cores, color=["#FF4B4B", "#262730", "#00C853"]) # Cores personalizadas
             
         with col_graf2:
-            st.markdown("#### 📊 Frequência de Dúzias (Gráfico)")
+            st.markdown("**Distribuição de Dúzias**")
             contagem_duzias = Counter(duzias)
             df_chart_duzias = pd.DataFrame({
                 "Vezes Sorteado": [contagem_duzias.get("1ª Dúzia", 0), contagem_duzias.get("2ª Dúzia", 0), contagem_duzias.get("3ª Dúzia", 0)]
             }, index=["1ª Dúzia", "2ª Dúzia", "3ª Dúzia"])
             st.bar_chart(df_chart_duzias)
 
-    with aba2:
-        st.markdown("#### ⏱️ Detetor de Atrasos Atuais (Atrasómetros)")
-        st.write("Indica há quantas rodadas consecutivas uma opção *não* sai na roleta.")
-        
-        dict_atrasos = calcular_atrasos(historico)
-        df_atrasos = pd.DataFrame([
-            {"Indicador/Campo": k, "Rodadas de Atraso": v} for k, v in dict_atrasos.items()
-        ])
-        st.dataframe(df_atrasos, use_container_width=True, hide_index=True)
-        
-        # Alerta de alta tendência (puramente estatístico)
-        max_atraso = max(dict_atrasos.values())
-        campo_max = [k for k, v in dict_atrasos.items() if v == max_atraso][0]
-        if max_atraso > 4:
-            st.warning(f"⚠️ **Alerta Estatístico:** O campo **{campo_max}** está sem sair há **{max_atraso}** rodadas seguidas!")
-
     with aba3:
-        st.markdown("#### 🔮 Diagnóstico de Vizinhos Físicos")
+        st.markdown("#### Tabela Completa de Atrasos")
+        df_atrasos = pd.DataFrame([
+            {"Indicador": k, "Rodadas de Atraso": v} for k, v in dict_atrasos.items()
+        ])
+        st.dataframe(df_atrasos.sort_values(by="Rodadas de Atraso", ascending=False), use_container_width=True, hide_index=True)
+
+    with aba4:
+        st.markdown("#### Zonas da Roda Europeia")
         ultimo_num = historico[-1]
         vizinhos = obter_vizinhos(ultimo_num, 2)
-        
-        st.success(f"O último número sorteado foi o **{ultimo_num}** ({classificar_numero(ultimo_num)[0]}).")
-        st.write(f"Os vizinhos de setor no cilindro real são: **{vizinhos[0]} e {vizinhos[1]}** (à esquerda) e **{vizinhos[2]} e {vizinhos[3]}** (à direita).")
+        st.info(f"Último sorteado: **{ultimo_num}** {classificar_numero(ultimo_num)[5]}")
+        st.write(f"Os 4 vizinhos imediatos na roda física são: **{vizinhos[0]}, {vizinhos[1]}, {vizinhos[2]}, {vizinhos[3]}**.")
         
 else:
-    st.info("Aguardando inserção de dados. Digite o número sorteado acima para gerar os gráficos e análises.")
+    st.info("O painel está pronto! Comece a inserir os números da sua sessão de roleta para gerar as estatísticas em tempo real.")
