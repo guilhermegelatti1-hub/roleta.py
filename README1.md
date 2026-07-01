@@ -25,3 +25,4 @@ Este projeto foi criado com o objetivo de unir **Programação (Python)** e **Es
 2. Instala as dependências necessárias executando o comando no terminal:
    ```bash
    pip install streamlit pandas
+pip install streamlit pandas numpy plotly
