@@ -16,13 +16,13 @@ class RoletaQuantEngine:
         self.VERMELHOS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
         self.PROB_COR = 18 / 37
         
-        # Mapeamento Exclusivo da Pista (Racetrack)
         self.JEU_ZERO = {12, 35, 3, 26, 0, 32, 15}
-        self.VOISINS = {22, 18, 29, 7, 28, 19, 4, 21, 2, 25} # Excluindo os do Jogo Zero
+        self.VOISINS = {22, 18, 29, 7, 28, 19, 4, 21, 2, 25}
         self.ORPHELINS = {1, 20, 14, 31, 9, 6, 34, 17}
         self.TIERS = {27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33}
 
     def classificar(self, n):
+        n = int(n)
         if n == 0: return {"Cor": "Verde", "Paridade": "Zero", "Duzia": "Zero", "Metade": "Zero"}
         return {
             "Cor": "Vermelho" if n in self.VERMELHOS else "Preto",
@@ -32,18 +32,12 @@ class RoletaQuantEngine:
         }
 
     def classificar_setor_pista(self, n):
+        n = int(n)
         if n in self.JEU_ZERO: return "Jeu Zéro"
         if n in self.VOISINS: return "Voisins"
         if n in self.ORPHELINS: return "Orphelins"
         if n in self.TIERS: return "Tiers"
         return "Erro"
-
-    def calcular_z_score(self, observacoes, total_jogadas, probabilidade_teorica):
-        if total_jogadas == 0: return 0
-        esperado = total_jogadas * probabilidade_teorica
-        desvio_padrao = math.sqrt(total_jogadas * probabilidade_teorica * (1 - probabilidade_teorica))
-        if desvio_padrao == 0: return 0
-        return (observacoes - esperado) / desvio_padrao
 
     def cadeias_de_markov(self, historico):
         if len(historico) < 2: return pd.DataFrame()
@@ -102,7 +96,7 @@ with st.sidebar:
         novo_num = st.number_input("Número Sorteado (0-36):", min_value=0, max_value=36, step=1)
         submitted = st.form_submit_button("Submeter Jogada", use_container_width=True)
         if submitted:
-            st.session_state.historico_quant.append(novo_num)
+            st.session_state.historico_quant.append(int(novo_num))
             st.rerun()
             
     if st.button("🚨 Nova Sessão", type="primary", use_container_width=True):
@@ -114,30 +108,45 @@ with st.sidebar:
 # ==========================================
 historico = st.session_state.historico_quant
 n_jogadas = len(historico)
+LIMITE_CALIBRACAO = 25 # Alterado de 5 para 25
 
 st.title("🎯 Radar Estatístico Visual")
 
-if n_jogadas < 5:
-    st.info("Insere pelo menos 5 jogadas para o Radar Visual conseguir detetar tendências.")
+if n_jogadas < LIMITE_CALIBRACAO:
+    # MÓDULO DE CALIBRAÇÃO (UX Profissional)
+    st.warning("⚠️ O motor quantitativo precisa de volume estatístico para evitar falsos positivos.")
+    st.markdown(f"### Calibrando a Mesa: {n_jogadas} / {LIMITE_CALIBRACAO} jogadas")
+    
+    # Barra de Progresso visual
+    progresso = int((n_jogadas / LIMITE_CALIBRACAO) * 100)
+    st.progress(progresso, text=f"A recolher dados da Roda... {progresso}% concluído")
+    
+    if n_jogadas > 0:
+        st.write(f"**Histórico temporário:** {historico}")
+        
+    st.info("Continua a inserir os números sorteados na barra lateral. O painel de diagnóstico será desbloqueado automaticamente.")
 else:
     # ---------------------------------------------------------
-    # ANÁLISE DA PISTA (RACETRACK)
+    # ANÁLISE DA PISTA (RACETRACK) COM DESEMPATE
     # ---------------------------------------------------------
+    st.success(f"✅ Calibração Concluída! Análise baseada em {n_jogadas} jogadas.")
     st.markdown("### 🏎️ Análise da Pista (Racetrack)")
     
-    # Extrair os setores do histórico
     setores = [engine.classificar_setor_pista(n) for n in historico]
     contagem_setores = Counter(setores)
     
-    # Encontrar o setor mais quente
-    setor_quente = contagem_setores.most_common(1)[0]
-    nome_setor = setor_quente[0]
-    qtd_setor = setor_quente[1]
-    prob_real = (qtd_setor / n_jogadas) * 100
+    max_ocorrencias = max(contagem_setores.values())
+    setores_quentes = [setor for setor, qtd in contagem_setores.items() if qtd == max_ocorrencias]
     
-    st.markdown(f"<div class='pista-box'>🔥 ZONA FÍSICA MAIS QUENTE: {nome_setor.upper()}🔥<br>A bola caiu neste setor {qtd_setor} vezes ({prob_real:.1f}% das rodadas)</div>", unsafe_allow_html=True)
+    if len(setores_quentes) > 1:
+        nome_setor_display = "EMPATE: " + " / ".join(setores_quentes)
+    else:
+        nome_setor_display = setores_quentes[0]
+        
+    prob_real = (max_ocorrencias / n_jogadas) * 100
     
-    # Distribuição visual da pista
+    st.markdown(f"<div class='pista-box'>🔥 ZONA FÍSICA MAIS QUENTE: {nome_setor_display.upper()} 🔥<br>Lidera com {max_ocorrencias} bolas ({prob_real:.1f}% das rodadas)</div>", unsafe_allow_html=True)
+    
     col_p1, col_p2, col_p3, col_p4 = st.columns(4)
     col_p1.metric("Jeu Zéro (7 nms)", f"{contagem_setores.get('Jeu Zéro', 0)}x")
     col_p2.metric("Voisins (10 nms)", f"{contagem_setores.get('Voisins', 0)}x")
@@ -159,22 +168,18 @@ else:
     
     col_v1, col_v2, col_v3 = st.columns(3)
     
-    # BLOCO 1: Transição de Cores
     with col_v1:
         if ultima_cor in df_markov.index:
             prob_prox_verm = df_markov.loc[ultima_cor, "Vermelho"]
             prob_prox_preto = df_markov.loc[ultima_cor, "Preto"]
-            
             cor_sugerida = "Vermelho" if prob_prox_verm > prob_prox_preto else "Preto" if prob_prox_preto > prob_prox_verm else "Indefinido"
-            
             cor_fundo = "#FF4B4B" if cor_sugerida == "Vermelho" else "#262730" if cor_sugerida == "Preto" else "#555555"
-            st.markdown(f"<div class='radar-box' style='background-color: {cor_fundo};'>1. TENDÊNCIA DE COR<br>Apostar no {cor_sugerida}</div>", unsafe_allow_html=True)
             
+            st.markdown(f"<div class='radar-box' style='background-color: {cor_fundo};'>1. TENDÊNCIA DE COR<br>Apostar no {cor_sugerida}</div>", unsafe_allow_html=True)
             st.write(f"Sempre que saiu {ultima_cor}, o próximo foi:")
             st.progress(int(prob_prox_verm), text=f"🔴 Vermelho: {prob_prox_verm}%")
             st.progress(int(prob_prox_preto), text=f"⚫ Preto: {prob_prox_preto}%")
     
-    # BLOCO 2: Anomalia Matemática (Atrasos)
     with col_v2:
         if rodadas_atraso >= 3:
             st.markdown(f"<div class='radar-box' style='background-color: #FFC107; color: black;'>2. ESTATÍSTICA DE ATRASO<br>Apostar no {cor_atrasada}</div>", unsafe_allow_html=True)
@@ -183,7 +188,6 @@ else:
             st.markdown(f"<div class='radar-box' style='background-color: #555555;'>2. ESTATÍSTICA DE ATRASO<br>Sem anomalias</div>", unsafe_allow_html=True)
             st.info("A mesa está a alternar normalmente. Sem atrasos severos nas cores.")
 
-    # BLOCO 3: Dúzias
     with col_v3:
         duzias = [engine.classificar(n)["Duzia"] for n in historico if engine.classificar(n)["Duzia"] != "Zero"]
         if duzias:
@@ -194,10 +198,10 @@ else:
     st.divider()
 
     # ---------------------------------------------------------
-    # ABAS DE ESTATÍSTICA PROFUNDA
+    # ABAS DE ESTATÍSTICA PROFUNDA & VERIFICAÇÃO
     # ---------------------------------------------------------
-    st.markdown("### 📊 Detalhes Técnicos")
-    aba1, aba2 = st.tabs(["Gráfico de Zonas da Pista", "Mapa de Transição Detalhado"])
+    st.markdown("### 📊 Detalhes Técnicos & Auditoria")
+    aba1, aba2, aba3 = st.tabs(["Gráfico da Pista", "Raio-X de Entradas", "Mapa de Transição"])
     
     with aba1:
         st.write("Distribuição real das jogadas ao longo do cilindro físico (Racetrack):")
@@ -206,18 +210,27 @@ else:
             values=list(contagem_setores.values()), 
             hole=0.4,
             color=list(contagem_setores.keys()),
-            color_discrete_map={
-                "Jeu Zéro": "#2ECC40",
-                "Voisins": "#0074D9",
-                "Orphelins": "#FF851B",
-                "Tiers": "#B10DC9"
-            }
+            color_discrete_map={"Jeu Zéro": "#2ECC40", "Voisins": "#0074D9", "Orphelins": "#FF851B", "Tiers": "#B10DC9"}
         )
-        fig_pista.update_layout(template="plotly_dark", title="Dominância de Setores no Cilindro")
+        fig_pista.update_layout(template="plotly_dark", title="Dominância de Setores")
         st.plotly_chart(fig_pista, use_container_width=True)
 
     with aba2:
+        st.markdown("**Verifica como o Sistema está a ler cada número inserido:**")
+        lista_raiox = []
+        for i, num in enumerate(historico):
+            info = engine.classificar(num)
+            setor = engine.classificar_setor_pista(num)
+            lista_raiox.append({
+                "Ordem": f"Jogada {i+1}", 
+                "Número": num, 
+                "Setor da Pista": setor, 
+                "Cor": info["Cor"], 
+                "Dúzia": info["Duzia"]
+            })
+        st.dataframe(pd.DataFrame(lista_raiox), use_container_width=True, hide_index=True)
+
+    with aba3:
         if not df_markov.empty:
-            fig_heat = px.imshow(df_markov, text_auto=True, color_continuous_scale="Viridis",
-                                 labels=dict(x="Próxima Cor", y="Cor Atual", color="Probabilidade (%)"))
+            fig_heat = px.imshow(df_markov, text_auto=True, color_continuous_scale="Viridis")
             st.plotly_chart(fig_heat, use_container_width=True)
