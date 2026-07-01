@@ -6,13 +6,11 @@ from collections import Counter
 # 1. CONFIGURAÇÕES E DADOS DA ROLETA
 # ==========================================
 
-# Ordem exata dos números na roda da Roleta Europeia
 RODA_EUROPEIA = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 
                  5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 
 VERMELHOS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
 
-# Funções de Classificação
 def classificar_numero(n):
     if n == 0:
         return "Verde", "Zero", "Zero", "Zero", "Zero"
@@ -32,11 +30,9 @@ def classificar_numero(n):
     return cor, paridade, metade, duzia, coluna
 
 def obter_vizinhos(n, qtd_vizinhos=2):
-    # Encontra o índice do número na roda física e retorna os vizinhos
     idx = RODA_EUROPEIA.index(n)
     tamanho = len(RODA_EUROPEIA)
     vizinhos = []
-    # Pega os números à esquerda e à direita
     for i in range(-qtd_vizinhos, qtd_vizinhos + 1):
         if i != 0:
             vizinho_idx = (idx + i) % tamanho
@@ -44,113 +40,138 @@ def obter_vizinhos(n, qtd_vizinhos=2):
     return vizinhos
 
 # ==========================================
-# 2. INICIALIZAÇÃO DA MEMÓRIA (STATE)
+# 2. FUNÇÃO AVANÇADA: CÁLCULO DE ATRASOS
 # ==========================================
+def calcular_atrasos(historico):
+    """Calcula há quantas rodadas uma determinada característica não aparece"""
+    if not historico:
+        return {}
+    
+    atrasos = {
+        "Vermelho": 0, "Preto": 0,
+        "Par": 0, "Ímpar": 0,
+        "1ª Dúzia": 0, "2ª Dúzia": 0, "3ª Dúzia": 0
+    }
+    
+    # Inverter o histórico para analisar do mais recente para o mais antigo
+    historico_invertido = historico[::-1]
+    
+    # Encontrar atrasos para Cores
+    for i, n in enumerate(historico_invertido):
+        cor, paridade, _, duzia, _ = classificar_numero(n)
+        
+        if i == 0: # O último número que saiu zera o atraso da sua categoria
+            continue
+            
+    # Lógica de varredura ativa de atraso
+    categorias = {
+        "Vermelho": lambda n: classificar_numero(n)[0] == "Vermelho",
+        "Preto": lambda n: classificar_numero(n)[0] == "Preto",
+        "Par": lambda n: classificar_numero(n)[1] == "Par",
+        "Ímpar": lambda n: classificar_numero(n)[1] == "Ímpar",
+        "1ª Dúzia": lambda n: classificar_numero(n)[3] == "1ª Dúzia",
+        "2ª Dúzia": lambda n: classificar_numero(n)[3] == "2ª Dúzia",
+        "3ª Dúzia": lambda n: classificar_numero(n)[3] == "3ª Dúzia",
+    }
+    
+    for cat, condicao in categories.items():
+        contador = 0
+        for n in historico_invertido:
+            if condicao(n):
+                break
+            contador += 1
+        atrasos[cat] = contador
+        
+    return atrasos
 
+# ==========================================
+# 3. INTERFACE WEB E MEMÓRIA
+# ==========================================
 if 'historico_pro' not in st.session_state:
     st.session_state.historico_pro = []
 
-st.set_page_config(page_title="Roleta Pro Analyzer", page_icon="🎯", layout="wide")
-st.title("🎯 Roleta Pro Analyzer - Diagnóstico Completo")
-
-# ==========================================
-# 3. INTERFACE DE ENTRADA
-# ==========================================
+st.set_page_config(page_title="Roleta Pro Dashboard", page_icon="📊", layout="wide")
+st.title("📊 Dashboard Analítico & Gráfico de Roleta")
 
 with st.container():
-    st.markdown("### 📥 Inserir Nova Jogada")
+    st.markdown("### 📥 Painel de Entrada de Dados")
     col_input, col_btn, col_clear = st.columns([2, 1, 1])
     
     with col_input:
-        novo_numero = st.number_input("Digite o número sorteado (0-36):", min_value=0, max_value=36, step=1)
+        novo_numero = st.number_input("Introduza o número sorteado (0-36):", min_value=0, max_value=36, step=1)
     with col_btn:
         st.write(" ")
         st.write(" ")
-        if st.button("➕ Adicionar Número", use_container_width=True):
+        if st.button("➕ Registar Número", use_container_width=True):
             st.session_state.historico_pro.append(novo_numero)
             st.rerun()
     with col_clear:
         st.write(" ")
         st.write(" ")
-        if st.button("🗑️ Limpar Tudo", use_container_width=True):
+        if st.button("🗑️ Reiniciar Sessão", use_container_width=True):
             st.session_state.historico_pro = []
             st.rerun()
 
 # ==========================================
-# 4. PAINEL DE DIAGNÓSTICO ESTATÍSTICO
+# 4. PROCESSAMENTO E EXIBIÇÃO GRÁFICA
 # ==========================================
-
 historico = st.session_state.historico_pro
 total = len(historico)
 
 st.divider()
 
 if total > 0:
-    st.markdown(f"**Total de Jogadas Analisadas:** {total} | **Últimos 10 números:** {historico[-10:]}")
+    st.markdown(f"**Análise Baseada em:** {total} jogadas | **Última sequência inserida:** {historico[-12:]}")
     
-    # Processar todos os dados do histórico
     dados_processados = [classificar_numero(n) for n in historico]
     cores = [d[0] for d in dados_processados]
-    paridades = [d[1] for d in dados_processados if d[1] != "Zero"]
     duzias = [d[3] for d in dados_processados if d[3] != "Zero"]
     
-    # Criar abas para organizar a informação
-    aba1, aba2, aba3 = st.tabs(["🔴 Cores & Básicos", "📊 Dúzias & Colunas", "🎡 Análise de Vizinhos"])
+    aba1, aba2, aba3 = st.tabs(["📈 Gráficos & Tendências", "🎯 Monitor de Atrasos", "🎡 Setores do Cilindro"])
     
     with aba1:
-        colA, colB = st.columns(2)
-        with colA:
-            st.markdown("#### Distribuição de Cores")
+        col_graf1, col_graf2 = st.columns(2)
+        
+        with col_graf1:
+            st.markdown("#### 🔴 Frequência de Cores (Gráfico)")
             contagem_cores = Counter(cores)
-            df_cores = pd.DataFrame([
-                {"Cor": k, "Ocorrências": v, "Frequência Real": f"{(v/total)*100:.1f}%"} 
-                for k, v in contagem_cores.items()
-            ])
-            st.table(df_cores)
+            # Criar um DataFrame estruturado para alimentar o gráfico do Streamlit
+            df_chart_cores = pd.DataFrame({
+                "Vezes Sorteado": [contagem_cores.get("Vermelho", 0), contagem_cores.get("Preto", 0), contagem_cores.get("Verde", 0)]
+            }, index=["Vermelho", "Preto", "Verde"])
+            st.bar_chart(df_chart_cores)
             
-        with colB:
-            st.markdown("#### Detetor de Sequências")
-            # Lógica para calcular a sequência atual da mesma cor
-            seq_atual = 1
-            for i in range(len(cores)-2, -1, -1):
-                if cores[i] == cores[-1]:
-                    seq_atual += 1
-                else:
-                    break
-            st.info(f"A cor **{cores[-1]}** saiu nas últimas **{seq_atual}** jogada(s) consecutiva(s).")
-            
-            st.markdown("#### Frequência Par/Ímpar (Ignorando Zeros)")
-            if paridades:
-                contagem_paridade = Counter(paridades)
-                df_par = pd.DataFrame([
-                    {"Tipo": k, "Ocorrências": v, "Frequência Real": f"{(v/len(paridades))*100:.1f}%"} 
-                    for k, v in contagem_paridade.items()
-                ])
-                st.table(df_par)
+        with col_graf2:
+            st.markdown("#### 📊 Frequência de Dúzias (Gráfico)")
+            contagem_duzias = Counter(duzias)
+            df_chart_duzias = pd.DataFrame({
+                "Vezes Sorteado": [contagem_duzias.get("1ª Dúzia", 0), contagem_duzias.get("2ª Dúzia", 0), contagem_duzias.get("3ª Dúzia", 0)]
+            }, index=["1ª Dúzia", "2ª Dúzia", "3ª Dúzia"])
+            st.bar_chart(df_chart_duzias)
 
     with aba2:
-        st.markdown("#### Análise de Dúzias")
-        if duzias:
-            cont_duzias = Counter(duzias)
-            # Probabilidade teórica de uma dúzia é 12/37
-            prob_teorica_duzia = (12/37) * 100
-            
-            df_duzias = pd.DataFrame([
-                {"Dúzia": k, "Ocorrências": v, "Freq. Real": f"{(v/len(duzias))*100:.1f}%", "Prob. Teórica": f"{prob_teorica_duzia:.1f}%"} 
-                for k, v in cont_duzias.items()
-            ])
-            st.table(df_duzias)
-        else:
-            st.write("Ainda não caíram números nas dúzias (apenas zeros).")
+        st.markdown("#### ⏱️ Detetor de Atrasos Atuais (Atrasómetros)")
+        st.write("Indica há quantas rodadas consecutivas uma opção *não* sai na roleta.")
+        
+        dict_atrasos = calcular_atrasos(historico)
+        df_atrasos = pd.DataFrame([
+            {"Indicador/Campo": k, "Rodadas de Atraso": v} for k, v in dict_atrasos.items()
+        ])
+        st.dataframe(df_atrasos, use_container_width=True, hide_index=True)
+        
+        # Alerta de alta tendência (puramente estatístico)
+        max_atraso = max(dict_atrasos.values())
+        campo_max = [k for k, v in dict_atrasos.items() if v == max_atraso][0]
+        if max_atraso > 4:
+            st.warning(f"⚠️ **Alerta Estatístico:** O campo **{campo_max}** está sem sair há **{max_atraso}** rodadas seguidas!")
 
     with aba3:
-        st.markdown("#### Diagnóstico de Zonas da Roda (Cilindro Físico)")
+        st.markdown("#### 🔮 Diagnóstico de Vizinhos Físicos")
         ultimo_num = historico[-1]
         vizinhos = obter_vizinhos(ultimo_num, 2)
         
-        st.success(f"O último número sorteado foi o **{ultimo_num}**.")
-        st.write(f"Os 4 vizinhos imediatos deste número no cilindro físico são: **{vizinhos}**")
-        st.write("Muitos jogadores profissionais analisam se a bola está a cair repetidamente num setor específico da roda física, o que pode indicar uma ligeira inclinação (tilt) na mesa física real.")
-
+        st.success(f"O último número sorteado foi o **{ultimo_num}** ({classificar_numero(ultimo_num)[0]}).")
+        st.write(f"Os vizinhos de setor no cilindro real são: **{vizinhos[0]} e {vizinhos[1]}** (à esquerda) e **{vizinhos[2]} e {vizinhos[3]}** (à direita).")
+        
 else:
-    st.warning("O painel está vazio. Insere o primeiro número para iniciar a recolha de dados.")
+    st.info("Aguardando inserção de dados. Digite o número sorteado acima para gerar os gráficos e análises.")
