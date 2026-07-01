@@ -15,7 +15,12 @@ class RoletaQuantEngine:
                      5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
         self.VERMELHOS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
         self.PROB_COR = 18 / 37
-        self.PROB_DUZIA = 12 / 37
+        
+        # Mapeamento Exclusivo da Pista (Racetrack)
+        self.JEU_ZERO = {12, 35, 3, 26, 0, 32, 15}
+        self.VOISINS = {22, 18, 29, 7, 28, 19, 4, 21, 2, 25} # Excluindo os do Jogo Zero
+        self.ORPHELINS = {1, 20, 14, 31, 9, 6, 34, 17}
+        self.TIERS = {27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33}
 
     def classificar(self, n):
         if n == 0: return {"Cor": "Verde", "Paridade": "Zero", "Duzia": "Zero", "Metade": "Zero"}
@@ -26,11 +31,14 @@ class RoletaQuantEngine:
             "Metade": "Baixo (1-18)" if n <= 18 else "Alto (19-36)"
         }
 
+    def classificar_setor_pista(self, n):
+        if n in self.JEU_ZERO: return "Jeu Zéro"
+        if n in self.VOISINS: return "Voisins"
+        if n in self.ORPHELINS: return "Orphelins"
+        if n in self.TIERS: return "Tiers"
+        return "Erro"
+
     def calcular_z_score(self, observacoes, total_jogadas, probabilidade_teorica):
-        """
-        Calcula o Z-Score para detetar anomalias estatísticas na roda física.
-        Z = (X - μ) / σ
-        """
         if total_jogadas == 0: return 0
         esperado = total_jogadas * probabilidade_teorica
         desvio_padrao = math.sqrt(total_jogadas * probabilidade_teorica * (1 - probabilidade_teorica))
@@ -38,11 +46,7 @@ class RoletaQuantEngine:
         return (observacoes - esperado) / desvio_padrao
 
     def cadeias_de_markov(self, historico):
-        """
-        Analisa a probabilidade de transição empírica (Ex: Qual a % de sair Preto DEPOIS de um Vermelho?)
-        """
         if len(historico) < 2: return pd.DataFrame()
-        
         transicoes = {"Vermelho": {"Vermelho": 0, "Preto": 0, "Verde": 0},
                       "Preto": {"Vermelho": 0, "Preto": 0, "Verde": 0},
                       "Verde": {"Vermelho": 0, "Preto": 0, "Verde": 0}}
@@ -57,35 +61,30 @@ class RoletaQuantEngine:
         df_trans = df_trans.div(df_trans.sum(axis=1), axis=0).fillna(0) * 100
         return df_trans.round(2)
 
-    def monte_carlo_banca(self, banca_inicial, aposta, historico, iteracoes=1000):
-        """
-        Simula 1000 cenários de 50 jogadas futuras usando o viés empírico atual da mesa.
-        """
-        if not historico: return []
-        cores = [self.classificar(n)["Cor"] for n in historico]
-        prob_empirica_red = cores.count("Vermelho") / len(cores)
+    def calcular_maior_atraso(self, historico):
+        if not historico: return "Nenhum", 0
+        hist_inv = historico[::-1]
+        cores = [self.classificar(n)["Cor"] for n in hist_inv]
         
-        resultados_finais = []
-        for _ in range(iteracoes):
-            banca = banca_inicial
-            for _ in range(50): # simula próximas 50 rodadas
-                if banca < aposta: break
-                # Aposta simulada no Vermelho baseada no viés da mesa vs algoritmo de RNG
-                sorteio = np.random.choice(["Win", "Loss"], p=[prob_empirica_red, 1-prob_empirica_red])
-                if sorteio == "Win": banca += aposta
-                else: banca -= aposta
-            resultados_finais.append(banca)
-        return resultados_finais
+        atraso_verm = next((i for i, cor in enumerate(cores) if cor == "Vermelho"), len(cores))
+        atraso_preto = next((i for i, cor in enumerate(cores) if cor == "Preto"), len(cores))
+        
+        if atraso_verm > atraso_preto:
+            return "Vermelho", atraso_verm
+        elif atraso_preto > atraso_verm:
+            return "Preto", atraso_preto
+        return "Nenhum", 0
 
 # ==========================================
 # 2. INICIALIZAÇÃO DA APP
 # ==========================================
 st.set_page_config(page_title="Roulette Quant Pro", layout="wide", page_icon="📈", initial_sidebar_state="expanded")
 
-# Tema Escuro Avançado via CSS injection
 st.markdown("""
     <style>
     .stMetric { background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid #00E676;}
+    .radar-box { padding: 15px; border-radius: 10px; margin-bottom: 10px; color: white; text-align: center; font-weight: bold;}
+    .pista-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #1f4037 0%, #99f2c8 100%); color: black; text-align: center; font-weight: bold; border: 2px solid white;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -95,12 +94,10 @@ if 'historico_quant' not in st.session_state:
 engine = RoletaQuantEngine()
 
 # ==========================================
-# 3. BARRA LATERAL - CONTROLO E ENTRADA
+# 3. BARRA LATERAL
 # ==========================================
 with st.sidebar:
-    st.title("⚙️ Painel de Controlo")
-    st.write("Insira os números da sessão real.")
-    
+    st.title("⚙️ Inserir Dados")
     with st.form("input_form", clear_on_submit=True):
         novo_num = st.number_input("Número Sorteado (0-36):", min_value=0, max_value=36, step=1)
         submitted = st.form_submit_button("Submeter Jogada", use_container_width=True)
@@ -108,107 +105,119 @@ with st.sidebar:
             st.session_state.historico_quant.append(novo_num)
             st.rerun()
             
-    if st.button("🚨 Reset Total (Nova Sessão)", type="primary", use_container_width=True):
+    if st.button("🚨 Nova Sessão", type="primary", use_container_width=True):
         st.session_state.historico_quant = []
         st.rerun()
 
-    st.divider()
-    st.markdown("### Config. Simulação")
-    banca = st.number_input("Banca Inicial ($):", value=1000, step=100)
-    unidade = st.number_input("Unidade de Aposta ($):", value=25, step=5)
-
 # ==========================================
-# 4. DASHBOARD QUANTITATIVO PRINCIPAL
+# 4. DASHBOARD VISUAL
 # ==========================================
 historico = st.session_state.historico_quant
 n_jogadas = len(historico)
 
-st.title("📈 Análise Quantitativa de Roleta Europeia")
+st.title("🎯 Radar Estatístico Visual")
 
-if n_jogadas < 10:
-    st.warning("⚠️ O motor quantitativo requer pelo menos 10 jogadas para gerar matrizes de transição estatisticamente relevantes.")
-    st.info(f"Jogadas inseridas: {n_jogadas}/10. Continue a inserir dados na barra lateral.")
+if n_jogadas < 5:
+    st.info("Insere pelo menos 5 jogadas para o Radar Visual conseguir detetar tendências.")
 else:
-    # 4.1. Dados Processados
-    dados = [engine.classificar(n) for n in historico]
-    df_dados = pd.DataFrame(dados)
+    # ---------------------------------------------------------
+    # ANÁLISE DA PISTA (RACETRACK)
+    # ---------------------------------------------------------
+    st.markdown("### 🏎️ Análise da Pista (Racetrack)")
     
-    # 4.2. Top Metrics (Visão Geral)
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Volume de Amostra", n_jogadas)
-    col2.metric("Último Número", historico[-1])
+    # Extrair os setores do histórico
+    setores = [engine.classificar_setor_pista(n) for n in historico]
+    contagem_setores = Counter(setores)
     
-    # Z-Score do Vermelho
-    qtd_vermelho = len(df_dados[df_dados["Cor"] == "Vermelho"])
-    z_score_red = engine.calcular_z_score(qtd_vermelho, n_jogadas, engine.PROB_COR)
-    col3.metric("Z-Score (Vermelho)", f"{z_score_red:.2f}", 
-                delta="Anomalia!" if abs(z_score_red) > 2 else "Padrão Normal", 
-                delta_color="inverse" if abs(z_score_red) > 2 else "off")
+    # Encontrar o setor mais quente
+    setor_quente = contagem_setores.most_common(1)[0]
+    nome_setor = setor_quente[0]
+    qtd_setor = setor_quente[1]
+    prob_real = (qtd_setor / n_jogadas) * 100
     
-    # Detetor de Viés da Roda
-    frequencias = Counter(historico)
-    num_mais_quente = frequencias.most_common(1)[0]
-    z_score_num = engine.calcular_z_score(num_mais_quente[1], n_jogadas, 1/37)
-    col4.metric(f"Nº {num_mais_quente[0]} (Quente)", f"Saiu {num_mais_quente[1]}x", 
-                delta=f"Z-Score: {z_score_num:.2f}", delta_color="normal")
+    st.markdown(f"<div class='pista-box'>🔥 ZONA FÍSICA MAIS QUENTE: {nome_setor.upper()}🔥<br>A bola caiu neste setor {qtd_setor} vezes ({prob_real:.1f}% das rodadas)</div>", unsafe_allow_html=True)
+    
+    # Distribuição visual da pista
+    col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+    col_p1.metric("Jeu Zéro (7 nms)", f"{contagem_setores.get('Jeu Zéro', 0)}x")
+    col_p2.metric("Voisins (10 nms)", f"{contagem_setores.get('Voisins', 0)}x")
+    col_p3.metric("Orphelins (8 nms)", f"{contagem_setores.get('Orphelins', 0)}x")
+    col_p4.metric("Tiers (12 nms)", f"{contagem_setores.get('Tiers', 0)}x")
 
     st.divider()
 
-    # 4.3. ABAS DE ANÁLISE PROFUNDA
-    aba1, aba2, aba3 = st.tabs(["🧬 Análise de Variância (Z-Scores)", "🔗 Matriz de Cadeias de Markov", "🎲 Simulação de Monte Carlo"])
+    # ---------------------------------------------------------
+    # SUGESTÕES ESTATÍSTICAS
+    # ---------------------------------------------------------
+    st.markdown("### 🧭 Probabilidades para o Próximo Giro")
+    
+    ultimo_numero = historico[-1]
+    ultima_cor = engine.classificar(ultimo_numero)["Cor"]
+    
+    df_markov = engine.cadeias_de_markov(historico)
+    cor_atrasada, rodadas_atraso = engine.calcular_maior_atraso(historico)
+    
+    col_v1, col_v2, col_v3 = st.columns(3)
+    
+    # BLOCO 1: Transição de Cores
+    with col_v1:
+        if ultima_cor in df_markov.index:
+            prob_prox_verm = df_markov.loc[ultima_cor, "Vermelho"]
+            prob_prox_preto = df_markov.loc[ultima_cor, "Preto"]
+            
+            cor_sugerida = "Vermelho" if prob_prox_verm > prob_prox_preto else "Preto" if prob_prox_preto > prob_prox_verm else "Indefinido"
+            
+            cor_fundo = "#FF4B4B" if cor_sugerida == "Vermelho" else "#262730" if cor_sugerida == "Preto" else "#555555"
+            st.markdown(f"<div class='radar-box' style='background-color: {cor_fundo};'>1. TENDÊNCIA DE COR<br>Apostar no {cor_sugerida}</div>", unsafe_allow_html=True)
+            
+            st.write(f"Sempre que saiu {ultima_cor}, o próximo foi:")
+            st.progress(int(prob_prox_verm), text=f"🔴 Vermelho: {prob_prox_verm}%")
+            st.progress(int(prob_prox_preto), text=f"⚫ Preto: {prob_prox_preto}%")
+    
+    # BLOCO 2: Anomalia Matemática (Atrasos)
+    with col_v2:
+        if rodadas_atraso >= 3:
+            st.markdown(f"<div class='radar-box' style='background-color: #FFC107; color: black;'>2. ESTATÍSTICA DE ATRASO<br>Apostar no {cor_atrasada}</div>", unsafe_allow_html=True)
+            st.warning(f"O **{cor_atrasada}** não sai há **{rodadas_atraso}** jogadas! A estatística sugere pressão para reequilíbrio.")
+        else:
+            st.markdown(f"<div class='radar-box' style='background-color: #555555;'>2. ESTATÍSTICA DE ATRASO<br>Sem anomalias</div>", unsafe_allow_html=True)
+            st.info("A mesa está a alternar normalmente. Sem atrasos severos nas cores.")
+
+    # BLOCO 3: Dúzias
+    with col_v3:
+        duzias = [engine.classificar(n)["Duzia"] for n in historico if engine.classificar(n)["Duzia"] != "Zero"]
+        if duzias:
+            duzia_quente = Counter(duzias).most_common(1)[0][0]
+            st.markdown(f"<div class='radar-box' style='background-color: #00E676; color: black;'>3. DÚZIA QUENTE<br>Apostar na {duzia_quente}</div>", unsafe_allow_html=True)
+            st.success(f"A **{duzia_quente}** dominou as saídas até agora. Sugestão de aposta de continuidade.")
+
+    st.divider()
+
+    # ---------------------------------------------------------
+    # ABAS DE ESTATÍSTICA PROFUNDA
+    # ---------------------------------------------------------
+    st.markdown("### 📊 Detalhes Técnicos")
+    aba1, aba2 = st.tabs(["Gráfico de Zonas da Pista", "Mapa de Transição Detalhado"])
     
     with aba1:
-        st.markdown("### 🧬 Distribuição e Detetor de Viés Físico")
-        st.write("Um Z-Score acima de +2.0 ou abaixo de -2.0 indica que a cor está a sair muito fora da probabilidade matemática esperada (possível tilt físico na mesa).")
-        
-        cores_counts = df_dados["Cor"].value_counts()
-        fig_bar = go.Figure()
-        
-        for cor in ["Vermelho", "Preto", "Verde"]:
-            qtd = cores_counts.get(cor, 0)
-            esperado = n_jogadas * (engine.PROB_COR if cor != "Verde" else 1/37)
-            
-            fig_bar.add_trace(go.Bar(
-                x=[cor], y=[qtd], name=f"{cor} (Real)",
-                marker_color="#FF4136" if cor == "Vermelho" else "#111111" if cor == "Preto" else "#2ECC40"
-            ))
-            fig_bar.add_trace(go.Scatter(
-                x=[cor], y=[esperado], mode="markers", name=f"Esperado",
-                marker=dict(symbol="line-ew-open", size=40, color="white", line=dict(width=3))
-            ))
-            
-        fig_bar.update_layout(title="Ocorrências Reais vs Esperança Matemática", barmode='overlay', template="plotly_dark")
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.write("Distribuição real das jogadas ao longo do cilindro físico (Racetrack):")
+        fig_pista = px.pie(
+            names=list(contagem_setores.keys()), 
+            values=list(contagem_setores.values()), 
+            hole=0.4,
+            color=list(contagem_setores.keys()),
+            color_discrete_map={
+                "Jeu Zéro": "#2ECC40",
+                "Voisins": "#0074D9",
+                "Orphelins": "#FF851B",
+                "Tiers": "#B10DC9"
+            }
+        )
+        fig_pista.update_layout(template="plotly_dark", title="Dominância de Setores no Cilindro")
+        st.plotly_chart(fig_pista, use_container_width=True)
 
     with aba2:
-        st.markdown("### 🔗 Matriz de Transição (Preditiva Empírica)")
-        st.write("Lê-se da Esquerda para o Topo. Exemplo: Quando o último foi Vermelho, qual a probabilidade empírica do próximo ser Preto nesta mesa?")
-        
-        df_markov = engine.cadeias_de_markov(historico)
         if not df_markov.empty:
             fig_heat = px.imshow(df_markov, text_auto=True, color_continuous_scale="Viridis",
-                                 labels=dict(x="Próxima Cor", y="Cor Atual", color="Probabilidade (%)"),
-                                 title="Mapa de Calor de Transição de Cores (%)")
+                                 labels=dict(x="Próxima Cor", y="Cor Atual", color="Probabilidade (%)"))
             st.plotly_chart(fig_heat, use_container_width=True)
-            
-            # Alerta de Padrão
-            max_trans = df_markov.max().max()
-            if max_trans > 60:
-                st.success(f"🔥 **Padrão Encontrado:** Existe uma transição a acontecer com {max_trans}% de frequência!")
-
-    with aba3:
-        st.markdown("### 🎲 Simulação de Bancarrota de Monte Carlo")
-        st.write(f"Projeção baseada na tua banca de **${banca}** apostando **${unidade}** no Vermelho (usando o viés atual da mesa). Simulação de 1000 cenários para as próximas 50 jogadas.")
-        
-        projecoes = engine.monte_carlo_banca(banca, unidade, historico)
-        if projecoes:
-            fig_hist = px.histogram(projecoes, nbins=50, 
-                                    title="Distribuição Probabilística da Banca após 50 Jogadas",
-                                    labels={"value": "Banca Final ($)", "count": "Cenários Simulados"},
-                                    color_discrete_sequence=["#00E676"])
-            fig_hist.add_vline(x=banca, line_dash="dash", line_color="white", annotation_text="Banca Inicial (Break-Even)")
-            
-            st.plotly_chart(fig_hist, use_container_width=True)
-            
-            risco_ruina = len([p for p in projecoes if p < banca]) / len(projecoes) * 100
-            st.markdown(f"**Risco Estatístico de Perda (Ruína):** `{risco_ruina:.2f}%`")
