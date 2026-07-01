@@ -7,11 +7,10 @@ from collections import Counter
 import math
 
 # ==========================================
-# 1. MOTOR QUANTITATIVO (OOP)
+# 1. MOTOR QUANTITATIVO & FÍSICO (OOP)
 # ==========================================
 class RoletaQuantEngine:
     def __init__(self):
-        # A roda física real da Roleta Europeia
         self.RODA = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 
                      5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
         self.VERMELHOS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
@@ -65,40 +64,52 @@ class RoletaQuantEngine:
         elif atraso_preto > atraso_verm: return "Preto", atraso_preto
         return "Nenhum", 0
 
-    # NOVO MÓDULO: CÁLCULO DE FÍSICA E SALTOS NA RODA
     def calcular_saltos(self, historico):
-        """Calcula a distância (sentido horário) entre jogadas consecutivas no cilindro físico"""
         if len(historico) < 2: return []
         saltos = []
         for i in range(len(historico)-1):
-            n_atual = int(historico[i])
-            n_seguinte = int(historico[i+1])
-            idx_atual = self.RODA.index(n_atual)
-            idx_seguinte = self.RODA.index(n_seguinte)
-            
-            # Cálculo da distância circular
-            distancia = (idx_seguinte - idx_atual) % 37
-            saltos.append(distancia)
+            idx_atual = self.RODA.index(int(historico[i]))
+            idx_seguinte = self.RODA.index(int(historico[i+1]))
+            saltos.append((idx_seguinte - idx_atual) % 37)
         return saltos
 
     def projetar_alvo(self, ultimo_numero, salto_predito):
-        """Calcula onde a bola vai cair com base no salto previsto"""
         idx_atual = self.RODA.index(int(ultimo_numero))
         idx_alvo = (idx_atual + salto_predito) % 37
         alvo_principal = self.RODA[idx_alvo]
-        
-        # Pega os 2 vizinhos de cada lado para criar uma "Zona de Aterrizagem"
-        zona = []
-        for i in range(-2, 3):
-            idx_vizinho = (idx_alvo + i) % 37
-            zona.append(self.RODA[idx_vizinho])
-            
+        zona = [self.RODA[(idx_alvo + i) % 37] for i in range(-2, 3)]
         return alvo_principal, zona
+
+    # NOVO: DETETOR DE FALHA MECÂNICA (Teste Qui-Quadrado)
+    def scanner_falha_mecanica(self, historico):
+        """Usa estatística inferencial para detetar se a roleta está viciada (tilt/desgaste)"""
+        n = len(historico)
+        if n < 37: 
+            # Sem volume para o teste matemático real, retorna estado Neutro
+            return 0, False, []
+        
+        esperado = n / 37.0
+        contagem = Counter(historico)
+        qui_quadrado = 0
+        
+        for num in range(37):
+            observado = contagem.get(num, 0)
+            qui_quadrado += ((observado - esperado) ** 2) / esperado
+            
+        # Limite Crítico: 50.99 (95% Confiança com 36 graus de liberdade)
+        mesa_viciada = qui_quadrado > 50.99
+        
+        # Encontra os números anómalos se a mesa estiver viciada
+        anomalias = []
+        if mesa_viciada:
+            anomalias = [num for num, qtd in contagem.items() if qtd > esperado * 1.5]
+            
+        return qui_quadrado, mesa_viciada, anomalias
 
 # ==========================================
 # 2. INICIALIZAÇÃO DA APP
 # ==========================================
-st.set_page_config(page_title="Roulette Quant Pro", layout="wide", page_icon="📈", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Roulette Quant Pro", layout="wide", page_icon="📉", initial_sidebar_state="expanded")
 
 st.markdown("""
     <style>
@@ -106,6 +117,7 @@ st.markdown("""
     .radar-box { padding: 15px; border-radius: 10px; margin-bottom: 10px; color: white; text-align: center; font-weight: bold;}
     .pista-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #1f4037 0%, #99f2c8 100%); color: black; text-align: center; font-weight: bold; border: 2px solid white;}
     .alvo-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #FF4136 0%, #FF851B 100%); color: white; text-align: center; font-weight: bold; border: 2px solid white;}
+    .vicio-box { padding: 25px; border-radius: 15px; background: linear-gradient(135deg, #FF0000 0%, #8B0000 100%); color: white; text-align: center; font-weight: bold; border: 3px dashed yellow; animation: blinker 2s linear infinite;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -135,28 +147,46 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================
-# 4. DASHBOARD VISUAL
+# 4. DASHBOARD VISUAL E ADAPTAÇÃO A FALHAS
 # ==========================================
 historico = st.session_state.historico_quant
 n_jogadas = len(historico)
 LIMITE_CALIBRACAO = 25 
 
-st.title("🎯 Radar Estatístico & Físico")
+st.title("🎯 Radar de IA com Adaptação a Falhas")
 
 if n_jogadas < LIMITE_CALIBRACAO:
-    st.warning("⚠️ A recolher dados da física da mesa e memória muscular do croupier.")
+    st.warning("⚠️ A recolher dados da física e mecânica da mesa.")
     st.markdown(f"### Calibrando: {n_jogadas} / {LIMITE_CALIBRACAO} jogadas")
     progresso = int((n_jogadas / LIMITE_CALIBRACAO) * 100)
     st.progress(progresso, text=f"{progresso}% concluído")
     
     if n_jogadas > 0: st.write(f"**Histórico:** {historico}")
 else:
-    st.success(f"✅ Mesa Calibrada. {n_jogadas} jogadas em análise.")
+    st.success(f"✅ Mesa Calibrada. {n_jogadas} jogadas em análise contínua.")
     
     # ---------------------------------------------------------
-    # NOVO: MÓDULO DE FÍSICA E ASSINATURA DO CROUPIER
+    # ADAPTAÇÃO SUPREMA: SCANNER DE FALHA MECÂNICA (VÍCIO)
     # ---------------------------------------------------------
-    st.markdown("### 🕵️‍♂️ Detetor de Assinatura do Croupier (Predição Física)")
+    qui_quadrado, mesa_viciada, anomalias = engine.scanner_falha_mecanica(historico)
+    
+    if mesa_viciada:
+        st.markdown(f"""
+        <div class='vicio-box'>
+            🚨 ALERTA MÁXIMO: FALHA FÍSICA DETETADA NA MESA 🚨<br><br>
+            O teste Qui-Quadrado (Score: {qui_quadrado:.1f}) indica que esta roleta está viciada.<br>
+            A matemática normal foi quebrada. Adaptação ativada:<br>
+            APOSTE EXCLUSIVAMENTE NOS NÚMEROS COM DEFEITO: {anomalias}
+        </div>
+        """, unsafe_allow_html=True)
+        st.write("") # Espaçamento
+    else:
+        st.info(f"Integridade da Mesa: Nível Saudável (Qui-Quadrado: {qui_quadrado:.1f}/50.99). A roleta está a comportar-se aleatoriamente.")
+
+    # ---------------------------------------------------------
+    # DETETOR DE ASSINATURA DO CROUPIER (Predição Física)
+    # ---------------------------------------------------------
+    st.markdown("### 🕵️‍♂️ Assinatura do Croupier (Memória Muscular)")
     
     saltos = engine.calcular_saltos(historico)
     contagem_saltos = Counter(saltos)
@@ -164,19 +194,15 @@ else:
     if contagem_saltos:
         salto_mais_comum = contagem_saltos.most_common(1)[0]
         distancia_padrao = salto_mais_comum[0]
-        freq_salto = salto_mais_comum[1]
-        percentagem_salto = (freq_salto / len(saltos)) * 100
+        percentagem_salto = (salto_mais_comum[1] / len(saltos)) * 100
         
-        ultimo_numero = historico[-1]
-        alvo, zona_aterrizagem = engine.projetar_alvo(ultimo_numero, distancia_padrao)
+        alvo, zona = engine.projetar_alvo(historico[-1], distancia_padrao)
         
         col_f1, col_f2 = st.columns([1, 2])
         with col_f1:
-            st.metric("Distância Padrão (Casas)", f"+{distancia_padrao} casas", f"Ocorre em {percentagem_salto:.1f}% dos giros")
-            st.write(f"O croupier tem a tendência física de lançar a bola para aterrar **{distancia_padrao} posições** à frente do último número sorteado.")
-        
+            st.metric("Distância Padrão de Lançamento", f"+{distancia_padrao} casas", f"{percentagem_salto:.1f}% de consistência")
         with col_f2:
-            st.markdown(f"<div class='alvo-box'>🎯 ALVO PROJETADO PARA O PRÓXIMO GIRO: NÚMERO {alvo}<br>Zona de Aterrizagem sugerida (Vizinhos): {zona_aterrizagem}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='alvo-box'>🎯 ALVO FÍSICO PROJETADO: NÚMERO {alvo}<br>Cobrir a zona de queda: {zona}</div>", unsafe_allow_html=True)
 
     st.divider()
 
@@ -193,16 +219,16 @@ else:
     nome_setor_display = "EMPATE: " + " / ".join(setores_quentes) if len(setores_quentes) > 1 else setores_quentes[0]
     prob_real = (max_ocorrencias / n_jogadas) * 100
     
-    st.markdown(f"<div class='pista-box'>🔥 ZONA FÍSICA MAIS QUENTE: {nome_setor_display.upper()} 🔥<br>Lidera com {max_ocorrencias} bolas ({prob_real:.1f}% das rodadas)</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='pista-box'>🔥 ZONA FÍSICA MAIS QUENTE: {nome_setor_display.upper()} 🔥<br>Absorveu {max_ocorrencias} bolas ({prob_real:.1f}%)</div>", unsafe_allow_html=True)
 
     st.divider()
 
     # ---------------------------------------------------------
-    # SUGESTÕES ESTATÍSTICAS
+    # SUGESTÕES DE PROBABILIDADE CLÁSSICA
     # ---------------------------------------------------------
-    st.markdown("### 🧭 Probabilidades Clássicas")
+    st.markdown("### 🧭 Radar Estatístico Secundário")
     
-    ultima_cor = engine.classificar(ultimo_numero)["Cor"]
+    ultima_cor = engine.classificar(historico[-1])["Cor"]
     df_markov = engine.cadeias_de_markov(historico)
     cor_atrasada, rodadas_atraso = engine.calcular_maior_atraso(historico)
     
@@ -215,46 +241,45 @@ else:
             cor_sugerida = "Vermelho" if prob_prox_verm > prob_prox_preto else "Preto" if prob_prox_preto > prob_prox_verm else "Indefinido"
             cor_fundo = "#FF4B4B" if cor_sugerida == "Vermelho" else "#262730" if cor_sugerida == "Preto" else "#555555"
             
-            st.markdown(f"<div class='radar-box' style='background-color: {cor_fundo};'>1. TENDÊNCIA DE COR<br>Apostar no {cor_sugerida}</div>", unsafe_allow_html=True)
-            st.write(f"Sempre que saiu {ultima_cor}, o próximo foi:")
+            st.markdown(f"<div class='radar-box' style='background-color: {cor_fundo};'>1. CADEIA DE MARKOV<br>Apostar no {cor_sugerida}</div>", unsafe_allow_html=True)
+            st.write(f"Após o {ultima_cor}, saiu:")
             st.progress(int(prob_prox_verm), text=f"🔴 Vermelho: {prob_prox_verm}%")
             st.progress(int(prob_prox_preto), text=f"⚫ Preto: {prob_prox_preto}%")
     
     with col_v2:
         if rodadas_atraso >= 3:
-            st.markdown(f"<div class='radar-box' style='background-color: #FFC107; color: black;'>2. ESTATÍSTICA DE ATRASO<br>Apostar no {cor_atrasada}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='radar-box' style='background-color: #FFC107; color: black;'>2. PRESSÃO MATEMÁTICA<br>Apostar no {cor_atrasada}</div>", unsafe_allow_html=True)
         else:
-            st.markdown(f"<div class='radar-box' style='background-color: #555555;'>2. ESTATÍSTICA DE ATRASO<br>Sem anomalias</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='radar-box' style='background-color: #555555;'>2. PRESSÃO MATEMÁTICA<br>Mesa Equilibrada</div>", unsafe_allow_html=True)
 
     with col_v3:
         duzias = [engine.classificar(n)["Duzia"] for n in historico if engine.classificar(n)["Duzia"] != "Zero"]
         if duzias:
             duzia_quente = Counter(duzias).most_common(1)[0][0]
-            st.markdown(f"<div class='radar-box' style='background-color: #00E676; color: black;'>3. DÚZIA QUENTE<br>Apostar na {duzia_quente}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='radar-box' style='background-color: #00E676; color: black;'>3. ZONA CONTÍNUA<br>Apostar na {duzia_quente}</div>", unsafe_allow_html=True)
 
     st.divider()
 
     # ---------------------------------------------------------
-    # ABAS DE ESTATÍSTICA PROFUNDA & AUDITORIA
+    # ABAS DE AUDITORIA
     # ---------------------------------------------------------
-    st.markdown("### 📊 Detalhes Técnicos & Auditoria")
-    aba1, aba2, aba3 = st.tabs(["Histograma de Saltos (Física)", "Gráfico da Pista", "Mapa de Transição"])
+    st.markdown("### 📊 Auditoria Quantitativa")
+    aba1, aba2, aba3 = st.tabs(["Física (Histograma de Saltos)", "Cilindro (Racetrack)", "Transição de Probabilidade"])
     
     with aba1:
-        st.write("Frequência de distâncias que a bola viaja no cilindro entre jogadas consecutivas:")
         if saltos:
-            fig_saltos = px.histogram(x=saltos, nbins=37, labels={"x": "Distância (Nº de Casas)", "y": "Vezes que Aconteceu"})
-            fig_saltos.update_layout(template="plotly_dark")
+            fig_saltos = px.histogram(x=saltos, nbins=37, labels={"x": "Distância de Salto (Casas)", "y": "Frequência"})
+            fig_saltos.update_layout(template="plotly_dark", title="Perfil Físico de Lançamento do Croupier")
             st.plotly_chart(fig_saltos, use_container_width=True)
 
     with aba2:
         fig_pista = px.pie(names=list(contagem_setores.keys()), values=list(contagem_setores.values()), hole=0.4,
                            color=list(contagem_setores.keys()),
                            color_discrete_map={"Jeu Zéro": "#2ECC40", "Voisins": "#0074D9", "Orphelins": "#FF851B", "Tiers": "#B10DC9"})
-        fig_pista.update_layout(template="plotly_dark", title="Dominância de Setores")
+        fig_pista.update_layout(template="plotly_dark", title="Frequência Real de Queda por Setor")
         st.plotly_chart(fig_pista, use_container_width=True)
 
     with aba3:
         if not df_markov.empty:
-            fig_heat = px.imshow(df_markov, text_auto=True, color_continuous_scale="Viridis")
+            fig_heat = px.imshow(df_markov, text_auto=True, color_continuous_scale="Viridis", title="Mapa Térmico de Mudança de Cor")
             st.plotly_chart(fig_heat, use_container_width=True)
