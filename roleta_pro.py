@@ -88,23 +88,32 @@ if 'historico_quant' not in st.session_state:
 engine = RoletaQuantEngine()
 
 # ==========================================
-# 3. BARRA LATERAL (Com UX Melhorada)
+# 3. BARRA LATERAL (Inserção Ultra-Rápida)
 # ==========================================
+def registar_jogada():
+    """Função Callback que corre automaticamente ao premir ENTER"""
+    num = st.session_state.input_roleta
+    if num is not None:
+        st.session_state.historico_quant.append(int(num))
+        # Limpa a caixa instantaneamente para a próxima jogada
+        st.session_state.input_roleta = None
+
 with st.sidebar:
     st.title("⚙️ Inserir Dados")
-    with st.form("input_form", clear_on_submit=True):
-        # A MUDANÇA ACONTECE AQUI: value=None deixa a caixa vazia!
-        novo_num = st.number_input("Número Sorteado (0-36):", min_value=0, max_value=36, step=1, value=None)
-        
-        submitted = st.form_submit_button("Submeter Jogada", use_container_width=True)
-        
-        if submitted:
-            if novo_num is not None: # Verifica se digitaste alguma coisa
-                st.session_state.historico_quant.append(int(novo_num))
-                st.rerun()
-            else:
-                st.warning("⚠️ Digite um número primeiro!")
+    st.write("Digita o número e prime **ENTER**.")
+    
+    # O formulário foi removido. Usamos a chave 'input_roleta' ligada ao on_change!
+    st.number_input(
+        "Número Sorteado (0-36):", 
+        min_value=0, 
+        max_value=36, 
+        step=1, 
+        value=None,
+        key="input_roleta",
+        on_change=registar_jogada
+    )
             
+    st.write("---")
     if st.button("🚨 Nova Sessão", type="primary", use_container_width=True):
         st.session_state.historico_quant = []
         st.rerun()
