@@ -88,16 +88,22 @@ if 'historico_quant' not in st.session_state:
 engine = RoletaQuantEngine()
 
 # ==========================================
-# 3. BARRA LATERAL
+# 3. BARRA LATERAL (Com UX Melhorada)
 # ==========================================
 with st.sidebar:
     st.title("⚙️ Inserir Dados")
     with st.form("input_form", clear_on_submit=True):
-        novo_num = st.number_input("Número Sorteado (0-36):", min_value=0, max_value=36, step=1)
+        # A MUDANÇA ACONTECE AQUI: value=None deixa a caixa vazia!
+        novo_num = st.number_input("Número Sorteado (0-36):", min_value=0, max_value=36, step=1, value=None)
+        
         submitted = st.form_submit_button("Submeter Jogada", use_container_width=True)
+        
         if submitted:
-            st.session_state.historico_quant.append(int(novo_num))
-            st.rerun()
+            if novo_num is not None: # Verifica se digitaste alguma coisa
+                st.session_state.historico_quant.append(int(novo_num))
+                st.rerun()
+            else:
+                st.warning("⚠️ Digite um número primeiro!")
             
     if st.button("🚨 Nova Sessão", type="primary", use_container_width=True):
         st.session_state.historico_quant = []
@@ -108,16 +114,14 @@ with st.sidebar:
 # ==========================================
 historico = st.session_state.historico_quant
 n_jogadas = len(historico)
-LIMITE_CALIBRACAO = 25 # Alterado de 5 para 25
+LIMITE_CALIBRACAO = 25 
 
 st.title("🎯 Radar Estatístico Visual")
 
 if n_jogadas < LIMITE_CALIBRACAO:
-    # MÓDULO DE CALIBRAÇÃO (UX Profissional)
     st.warning("⚠️ O motor quantitativo precisa de volume estatístico para evitar falsos positivos.")
     st.markdown(f"### Calibrando a Mesa: {n_jogadas} / {LIMITE_CALIBRACAO} jogadas")
     
-    # Barra de Progresso visual
     progresso = int((n_jogadas / LIMITE_CALIBRACAO) * 100)
     st.progress(progresso, text=f"A recolher dados da Roda... {progresso}% concluído")
     
