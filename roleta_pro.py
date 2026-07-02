@@ -2,30 +2,25 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 from collections import Counter
-import math
-import pytesseract
-from pytesseract import Output
-from PIL import Image, ImageEnhance, ImageOps
 import re
+from PIL import Image
+import easyocr  # Nova biblioteca de Deep Learning para Visão Computacional
 
 # ==========================================
-# 1. MOTOR QUANTITATIVO & FÍSICO (OOP)
+# 1. MOTOR QUANTITATIVO & FÍSICO
 # ==========================================
 class RoletaQuantEngine:
     def __init__(self):
         self.RODA = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 
                      5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
         self.VERMELHOS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
-        
         self.SETORES_PLENOS = {
             "Jeu Zéro": [12, 35, 3, 26, 0, 32, 15],
             "Voisins": [22, 18, 29, 7, 28, 19, 4, 21, 2, 25],
             "Orphelins": [1, 20, 14, 31, 9, 6, 34, 17],
             "Tiers": [27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33]
         }
-        
         self.JEU_ZERO = set(self.SETORES_PLENOS["Jeu Zéro"])
         self.VOISINS = set(self.SETORES_PLENOS["Voisins"])
         self.ORPHELINS = set(self.SETORES_PLENOS["Orphelins"])
@@ -56,22 +51,18 @@ class RoletaQuantEngine:
                       "Verde": {"Vermelho": 0, "Preto": 0, "Verde": 0}}
         cores = [self.classificar(n)["Cor"] for n in historico]
         for i in range(len(cores)-1):
-            atual = cores[i]
-            proximo = cores[i+1]
+            atual, proximo = cores[i], cores[i+1]
             transicoes[atual][proximo] += 1
-            
         df_trans = pd.DataFrame(transicoes).T
-        df_trans = df_trans.div(df_trans.sum(axis=1), axis=0).fillna(0) * 100
-        return df_trans.round(2)
+        return df_trans.div(df_trans.sum(axis=1), axis=0).fillna(0).round(2) * 100
 
     def calcular_maior_atraso(self, historico):
         if not historico: return "Nenhum", 0
-        hist_inv = historico[::-1]
-        cores = [self.classificar(n)["Cor"] for n in hist_inv]
+        cores = [self.classificar(n)["Cor"] for n in historico[::-1]]
         atraso_verm = next((i for i, cor in enumerate(cores) if cor == "Vermelho"), len(cores))
         atraso_preto = next((i for i, cor in enumerate(cores) if cor == "Preto"), len(cores))
         if atraso_verm > atraso_preto: return "Vermelho", atraso_verm
-        elif atraso_preto > atraso_verm: return "Preto", atraso_preto
+        if atraso_preto > atraso_verm: return "Preto", atraso_preto
         return "Nenhum", 0
 
     def calcular_saltos(self, historico):
@@ -84,354 +75,221 @@ class RoletaQuantEngine:
         return saltos
 
     def projetar_alvo(self, ultimo_numero, salto_predito):
-        idx_atual = self.RODA.index(int(ultimo_numero))
-        idx_alvo = (idx_atual + salto_predito) % 37
-        alvo_principal = self.RODA[idx_alvo]
+        idx_alvo = (self.RODA.index(int(ultimo_numero)) + salto_predito) % 37
         zona = [self.RODA[(idx_alvo + i) % 37] for i in range(-2, 3)]
-        return alvo_principal, zona
+        return self.RODA[idx_alvo], zona
 
     def scanner_falha_mecanica(self, historico):
         n = len(historico)
         if n < 37: return 0, False, []
         esperado = n / 37.0
         contagem = Counter(historico)
-        qui_quadrado = 0
-        for num in range(37):
-            observado = contagem.get(num, 0)
-            qui_quadrado += ((observado - esperado) ** 2) / esperado
+        qui_quadrado = sum(((contagem.get(num, 0) - esperado) ** 2) / esperado for num in range(37))
         mesa_viciada = qui_quadrado > 50.99
-        anomalias = []
-        if mesa_viciada:
-            anomalias = [num for num, qtd in contagem.items() if qtd > esperado * 1.5]
+        anomalias = [num for num, qtd in contagem.items() if qtd > esperado * 1.5] if mesa_viciada else []
         return qui_quadrado, mesa_viciada, anomalias
 
 # ==========================================
-# 2. INICIALIZAÇÃO DA APP
+# 2. INICIALIZAÇÃO E MODELO IA
 # ==========================================
-st.set_page_config(page_title="Roulette Quant Pro", layout="wide", page_icon="📉", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Roulette Quant Pro", layout="wide", initial_sidebar_state="expanded")
+
+# Carregar o modelo de Deep Learning em Cache (para não demorar a carregar a cada print)
+@st.cache_resource
+def load_ocr_model():
+    # Carrega o modelo em inglês (suficiente para ler números)
+    return easyocr.Reader(['en'], gpu=False) 
+
+reader = load_ocr_model()
+engine = RoletaQuantEngine()
+
+if 'historico_quant' not in st.session_state:
+    st.session_state.historico_quant = []
 
 st.markdown("""
     <style>
     .stMetric { background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid #00E676;}
     .radar-box { padding: 15px; border-radius: 10px; margin-bottom: 10px; color: white; text-align: center; font-weight: bold;}
-    .pista-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #1f4037 0%, #99f2c8 100%); color: black; text-align: center; font-weight: bold; border: 2px solid white;}
-    .alvo-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #FF4136 0%, #FF851B 100%); color: white; text-align: center; font-weight: bold; border: 2px solid white;}
-    .mega-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #8A2BE2 0%, #FF00FF 100%); color: white; text-align: center; font-weight: bold; border: 2px solid #FFD700;}
-    .erratico-box { padding: 20px; border-radius: 15px; background-color: #333333; color: #aaaaaa; text-align: center; border: 1px dashed #777;}
-    .vicio-box { padding: 25px; border-radius: 15px; background: linear-gradient(135deg, #FF0000 0%, #8B0000 100%); color: white; text-align: center; font-weight: bold; border: 3px dashed yellow; animation: blinker 2s linear infinite;}
+    .pista-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #1f4037 0%, #99f2c8 100%); color: black; text-align: center; font-weight: bold;}
+    .alvo-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #FF4136 0%, #FF851B 100%); color: white; text-align: center; font-weight: bold;}
+    .mega-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #8A2BE2 0%, #FF00FF 100%); color: white; text-align: center; font-weight: bold;}
     .historico-scroll { max-height: 300px; overflow-y: auto; padding: 15px; background-color: #111111; border-radius: 8px; border: 1px solid #333; font-size: 16px; line-height: 1.8;}
-    
-    /* Ajustes para o Teclado de Botões ficarem mais compactos */
-    div[data-testid="stSidebar"] button { font-weight: bold; }
     </style>
-    """, unsafe_allow_html=True)
-
-if 'historico_quant' not in st.session_state:
-    st.session_state.historico_quant = []
-
-engine = RoletaQuantEngine()
+""", unsafe_allow_html=True)
 
 # ==========================================
-# 3. BARRA LATERAL (ENTRADAS 100% PRECISAS)
+# 3. BARRA LATERAL (ENTRADA OCR POR DEEP LEARNING)
 # ==========================================
-def submeter_texto_rapido():
-    entrada = st.session_state.input_texto_rapido
-    if entrada:
-        numeros = re.findall(r'\b([0-9]|[1-2][0-9]|3[0-6])\b', entrada)
-        if numeros:
-            st.session_state.historico_quant.extend([int(n) for n in numeros])
-        st.session_state.input_texto_rapido = "" 
-
 with st.sidebar:
     st.markdown("### 🎮 Modo de Análise")
-    modo_jogo = st.radio("Escolhe a tua mesa:", ["Clássica (Europeia/Francesa)", "Mega Roulette (Multiplicadores)"], index=0, label_visibility="collapsed")
+    modo_jogo = st.radio("Mesa:", ["Clássica (Europeia)", "Mega Roulette"], index=0, label_visibility="collapsed")
     st.divider()
 
-    st.title("⚙️ Inserir Dados")
+    st.title("📸 Ler Print (EasyOCR)")
+    st.info("Faz `Ctrl + V` do recorte da grelha de números.")
     
-    aba_teclado, aba_texto, aba_ocr = st.tabs(["🎛️ Teclado", "⌨️ Digitar", "📸 OCR"])
+    imagem_upload = st.file_uploader("Upload", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
     
-    # --- NOVO: TECLADO DE CRUPIÊ (Zero Bugs, 100% Rápido) ---
-    with aba_teclado:
-        st.write("Clica no número para inserir direto:")
-        
-        # Função para adicionar o número via botão
-        def add_num(n):
-            st.session_state.historico_quant.append(n)
-            
-        # Botão do ZERO (Verde)
-        if st.button("0 🟢", use_container_width=True): add_num(0)
-        
-        # Grelha de 1 a 36
-        for row in range(12):
-            c1, c2, c3 = st.columns(3)
-            n1 = row * 3 + 1
-            n2 = row * 3 + 2
-            n3 = row * 3 + 3
-            
-            # Helper para colorir e colocar emoji
-            def btn_label(num):
-                cor = engine.classificar(num)["Cor"]
-                return f"{num} 🔴" if cor == "Vermelho" else f"{num} ⚫"
-            
-            with c1:
-                if st.button(btn_label(n1), use_container_width=True): add_num(n1)
-            with c2:
-                if st.button(btn_label(n2), use_container_width=True): add_num(n2)
-            with c3:
-                if st.button(btn_label(n3), use_container_width=True): add_num(n3)
-
-    with aba_texto:
-        st.write("Copia do chat ou digita rápido (ex: `12 5 36 0`):")
-        st.text_input("Números:", key="input_texto_rapido", on_change=submeter_texto_rapido)
-        
-    with aba_ocr:
-        st.warning("IA com dificuldade nas cores do casino. (Experimental)")
-        imagem_upload = st.file_uploader("", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
-        if imagem_upload is not None:
+    if imagem_upload is not None:
+        with st.spinner('A analisar imagem com Deep Learning...'):
             try:
+                # Converter imagem para formato legível pelo OpenCV/EasyOCR
                 imagem = Image.open(imagem_upload).convert('RGB')
-                imagem = imagem.resize((imagem.width * 3, imagem.height * 3), Image.Resampling.LANCZOS)
-                img_gray = imagem.convert('L')
-                img_invertida = ImageOps.invert(img_gray)
-                img_final = ImageEnhance.Contrast(img_invertida).enhance(2.5)
+                img_array = np.array(imagem)
                 
-                config_tesseract = r'--psm 11 -c tessedit_char_whitelist=0123456789'
-                dados = pytesseract.image_to_data(img_final, output_type=Output.DICT, config=config_tesseract)
+                # O EasyOCR processa a imagem original diretamente, sem precisarmos de inverter cores
+                resultados = reader.readtext(img_array)
                 
                 itens_validos = []
-                for i in range(len(dados['text'])):
-                    texto = dados['text'][i].strip()
-                    confianca = int(dados['conf'][i]) if str(dados['conf'][i]).lstrip('-').isdigit() else 0
-                    if texto.isdigit() and confianca > 30: 
-                        num = int(texto)
-                        if 0 <= num <= 36:
-                            itens_validos.append({'num': num, 'left': dados['left'][i], 'top': dados['top'][i]})
                 
+                # Passo A: Extração de Dados
+                for (bbox, text, conf) in resultados:
+                    texto_limpo = re.sub(r'[^0-9]', '', text) # Limpa tudo o que não for número
+                    
+                    if texto_limpo.isdigit() and conf > 0.4: # Confiança mínima de 40%
+                        num = int(texto_limpo)
+                        if 0 <= num <= 36: # Ignora multiplicadores como 50 ou 200
+                            # Calcula o centro da caixa delimitadora do número (Centro Y e Centro X)
+                            centro_x = (bbox[0][0] + bbox[1][0]) / 2
+                            centro_y = (bbox[0][1] + bbox[2][1]) / 2
+                            
+                            itens_validos.append({'num': num, 'x': centro_x, 'y': centro_y})
+
                 numeros_limpos = []
+                
+                # Passo B: Algoritmo de Agrupamento Geométrico
                 if itens_validos:
-                    itens_validos.sort(key=lambda x: x['top'])
+                    # 1. Ordena todos os números de cima para baixo
+                    itens_validos.sort(key=lambda item: item['y'])
+                    
                     linhas = []
                     linha_atual = []
-                    topo_referencia = None
+                    y_referencia = None
+                    
+                    # 2. Agrupa os números que partilham a mesma linha física
                     for item in itens_validos:
-                        if topo_referencia is None:
+                        if y_referencia is None:
                             linha_atual.append(item)
-                            topo_referencia = item['top']
-                        elif abs(item['top'] - topo_referencia) < 35:
+                            y_referencia = item['y']
+                        # Se o centro do número estiver num raio de 25 píxeis de altura, é da mesma linha
+                        elif abs(item['y'] - y_referencia) < 25: 
                             linha_atual.append(item)
                         else:
                             linhas.append(linha_atual)
                             linha_atual = [item]
-                            topo_referencia = item['top']
-                    if linha_atual: linhas.append(linha_atual)
+                            y_referencia = item['y']
+                    if linha_atual:
+                        linhas.append(linha_atual)
                         
+                    # 3. Ordena os números de cada linha da Esquerda para a Direita
                     for linha in linhas:
-                        linha.sort(key=lambda x: x['left'])
-                        for item in linha: numeros_limpos.append(item['num'])
+                        linha.sort(key=lambda item: item['x'])
+                        for item in linha:
+                            numeros_limpos.append(item['num'])
                 
                 if numeros_limpos:
-                    st.success(f"**Lidos:** {numeros_limpos}")
-                    col_b1, col_b2 = st.columns(2)
-                    with col_b1:
+                    st.success(f"Lidos {len(numeros_limpos)} números.")
+                    st.info(str(numeros_limpos))
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
                         if st.button("✅ Injetar", use_container_width=True):
                             st.session_state.historico_quant.extend(numeros_limpos)
                             st.rerun()
-                    with col_b2:
+                    with col2:
                         if st.button("🔄 Inverter", use_container_width=True):
                             st.session_state.historico_quant.extend(reversed(numeros_limpos))
                             st.rerun()
                 else:
-                    st.error("Erro na leitura geométrica.")
+                    st.error("A IA não detetou números de 0 a 36.")
             except Exception as e:
-                st.error("Erro interno. Falha no OCR.")
+                st.error(f"Erro no processamento: {e}")
 
     st.divider()
     
-    st.markdown("### 📜 Histórico da Sessão")
-    historico_atual = st.session_state.historico_quant
-    
-    if len(historico_atual) > 0:
-        hist_formatado = []
-        for n in historico_atual:
-            cor = engine.classificar(n)["Cor"]
-            emoji = "🔴" if cor == "Vermelho" else "⚫" if cor == "Preto" else "🟢"
-            hist_formatado.append(f"**{n}** {emoji}")
-            
-        texto_historico = " ➔ ".join(hist_formatado)
-        st.markdown(f"<div class='historico-scroll'>{texto_historico}</div>", unsafe_allow_html=True)
-        st.caption(f"Total digitado: {len(historico_atual)} jogadas")
-    else:
-        st.info("Nenhum número registado.")
+    st.markdown("### 📜 Histórico")
+    historico = st.session_state.historico_quant
+    if len(historico) > 0:
+        texto_hist = " ➔ ".join([f"**{n}** {'🔴' if engine.classificar(n)['Cor']=='Vermelho' else '⚫' if engine.classificar(n)['Cor']=='Preto' else '🟢'}" for n in historico])
+        st.markdown(f"<div class='historico-scroll'>{texto_hist}</div>", unsafe_allow_html=True)
+        st.caption(f"Total: {len(historico)} jogadas")
         
-    st.divider()
-    
-    # ---------------------------------------------------------
-    # BOTÃO PARA REMOVER O ÚLTIMO NÚMERO (CORREÇÃO DE ERRO)
-    # ---------------------------------------------------------
-    col_limpar1, col_limpar2 = st.columns(2)
-    with col_limpar1:
-        if st.button("↩️ Apagar Último", use_container_width=True):
-            if len(st.session_state.historico_quant) > 0:
+        col_limpar1, col_limpar2 = st.columns(2)
+        with col_limpar1:
+            if st.button("↩️ Apagar Último"):
                 st.session_state.historico_quant.pop()
                 st.rerun()
-    with col_limpar2:
-        if st.button("🚨 Limpar Sessão", type="primary", use_container_width=True):
-            st.session_state.historico_quant = []
-            st.rerun()
+        with col_limpar2:
+            if st.button("🚨 Limpar Tudo"):
+                st.session_state.historico_quant = []
+                st.rerun()
+    else:
+        st.info("Nenhum número registado.")
 
 # ==========================================
-# 4. DASHBOARD VISUAL (DINÂMICO)
+# 4. DASHBOARD VISUAL
 # ==========================================
-historico = st.session_state.historico_quant
 n_jogadas = len(historico)
 LIMITE_CALIBRACAO = 25 
 
-st.title("🎯 Radar de IA com Adaptação a Falhas")
+st.title("🎯 Radar de IA")
 
 if n_jogadas < LIMITE_CALIBRACAO:
-    st.warning("⚠️ A recolher dados da física e mecânica da mesa.")
-    st.markdown(f"### Calibrando: {n_jogadas} / {LIMITE_CALIBRACAO} jogadas")
-    progresso = int((n_jogadas / LIMITE_CALIBRACAO) * 100)
-    st.progress(progresso, text=f"{progresso}% concluído")
+    st.warning("⚠️ Calibrando...")
+    st.progress(int((n_jogadas / LIMITE_CALIBRACAO) * 100), text=f"{n_jogadas}/{LIMITE_CALIBRACAO} jogadas")
 else:
-    st.success(f"✅ Mesa Calibrada. {n_jogadas} jogadas em análise contínua.")
+    st.success(f"✅ Mesa Calibrada. Análise de {n_jogadas} jogadas contínuas.")
     
     qui_quadrado, mesa_viciada, anomalias = engine.scanner_falha_mecanica(historico)
-    
     if mesa_viciada:
-        st.markdown(f"""
-        <div class='vicio-box'>
-            🚨 ALERTA MÁXIMO: FALHA FÍSICA DETETADA NA MESA 🚨<br><br>
-            O teste Qui-Quadrado (Score: {qui_quadrado:.1f}) indica que esta roleta está viciada.<br>
-            APOSTE EXCLUSIVAMENTE NOS NÚMEROS COM DEFEITO: {anomalias}
-        </div>
-        """, unsafe_allow_html=True)
+        st.error(f"🚨 FALHA FÍSICA DETETADA. APOSTE EM: {anomalias}")
     else:
-        st.info(f"Integridade da Mesa: Nível Saudável (Qui-Quadrado: {qui_quadrado:.1f}/50.99).")
+        st.info(f"Integridade da Mesa: Saudável (Qui-Quadrado: {qui_quadrado:.1f}/50.99)")
 
-    if modo_jogo == "Mega Roulette (Multiplicadores)":
-        st.markdown("### ⚡ Estratégia de Cobertura Mega Roulette")
-        st.write("Atenção: Para ganhares os multiplicadores, tens de fazer **Apostas Plenas (Straight Up)** nestes números.")
-        
+    if modo_jogo == "Mega Roulette":
+        st.markdown("### ⚡ Cobertura Mega Roulette")
         setores = [engine.classificar_setor_pista(n) for n in historico]
-        contagem_setores = Counter(setores)
-        
-        if "Erro" in contagem_setores:
-            del contagem_setores["Erro"]
+        contagem = Counter([s for s in setores if s != "Erro"])
+        if contagem:
+            setor_quente = contagem.most_common(1)[0][0]
+            numeros_aposta = engine.SETORES_PLENOS[setor_quente]
+            st.markdown(f"<div class='mega-box'>🔥 ZONA MULTIPLICADOR: {setor_quente.upper()}<br><b>Fichas Plenas em: {numeros_aposta}</b></div>", unsafe_allow_html=True)
             
-        if contagem_setores:
-            setor_quente = contagem_setores.most_common(1)[0][0]
-            numeros_para_apostar = engine.SETORES_PLENOS[setor_quente]
-            custo_fichas = len(numeros_para_apostar)
-            prob_real = (contagem_setores[setor_quente] / n_jogadas) * 100
-            
-            st.markdown(f"""
-            <div class='mega-box'>
-                🔥 ZONA DE CAPTURA DO MULTIPLICADOR: {setor_quente.upper()} 🔥<br>
-                A bola está a cair aqui {prob_real:.1f}% das vezes.<br><br>
-                <b>Coloca 1 ficha Plena em cada um destes números:</b><br>
-                <h2>{numeros_para_apostar}</h2>
-                <i>Custo total da ronda: {custo_fichas} fichas</i>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.warning("Dados insuficientes para calcular o setor Mega.")
-            
-        st.divider()
-        st.markdown("*(No Modo Mega, o Radar de Cores e Dúzias é desativado para focar na captura de multiplicadores)*")
-
     else:
-        st.markdown("### 🕵️‍♂️ Assinatura do Croupier (Memória Muscular)")
-        
+        st.markdown("### 🕵️‍♂️ Assinatura do Croupier")
         saltos = engine.calcular_saltos(historico)
         if saltos:
-            contagem_saltos = Counter(saltos)
-            salto_mais_comum = contagem_saltos.most_common(1)[0]
-            distancia_padrao = salto_mais_comum[0]
+            distancia_padrao = Counter(saltos).most_common(1)[0][0]
+            confianca_zona = (sum(1 for s in saltos if min(abs(s - distancia_padrao), 37 - abs(s - distancia_padrao)) <= 2) / len(saltos)) * 100
             
-            saltos_na_zona = sum(1 for s in saltos if min(abs(s - distancia_padrao), 37 - abs(s - distancia_padrao)) <= 2)
-            confianca_zona = (saltos_na_zona / len(saltos)) * 100
-            
-            col_f1, col_f2 = st.columns([1, 2])
-            
+            c1, c2 = st.columns([1, 2])
             if confianca_zona < 25.0:
-                with col_f1:
-                    st.metric("Distância Padrão", "Falhou", "Dispersão Elevada")
-                with col_f2:
-                    st.markdown("<div class='erratico-box'>❌ CRUPIÊ ERRÁTICO ❌<br>A força de lançamento varia demasiado.</div>", unsafe_allow_html=True)
+                c1.metric("Distância Padrão", "Falhou")
+                c2.error("❌ CRUPIÊ ERRÁTICO")
             else:
                 alvo, zona = engine.projetar_alvo(historico[-1], distancia_padrao)
-                with col_f1:
-                    st.metric("Distância Padrão de Lançamento", f"+{distancia_padrao} casas", f"Zona atinge {confianca_zona:.1f}% de precisão")
-                with col_f2:
-                    st.markdown(f"<div class='alvo-box'>🎯 ALVO FÍSICO PROJETADO: NÚMERO {alvo}<br>Cobrir a zona de queda: {zona}</div>", unsafe_allow_html=True)
+                c1.metric("Lançamento", f"+{distancia_padrao}", f"{confianca_zona:.1f}% precisão")
+                c2.markdown(f"<div class='alvo-box'>🎯 ALVO: {alvo}<br>Cobrir: {zona}</div>", unsafe_allow_html=True)
 
         st.divider()
-
-        st.markdown("### 🏎️ Análise da Pista (Racetrack)")
-        setores = [engine.classificar_setor_pista(n) for n in historico]
-        contagem_setores = Counter(setores)
-        max_ocorrencias = max(contagem_setores.values())
-        setores_quentes = [setor for setor, qtd in contagem_setores.items() if qtd == max_ocorrencias]
-        
-        nome_setor_display = "EMPATE: " + " / ".join(setores_quentes) if len(setores_quentes) > 1 else setores_quentes[0]
-        prob_real = (max_ocorrencias / n_jogadas) * 100
-        st.markdown(f"<div class='pista-box'>🔥 ZONA FÍSICA MAIS QUENTE: {nome_setor_display.upper()} 🔥<br>Absorveu {max_ocorrencias} bolas ({prob_real:.1f}%)</div>", unsafe_allow_html=True)
-
-        st.divider()
-
-        st.markdown("### 🧭 Radar Estatístico Secundário")
-        ultima_cor = engine.classificar(historico[-1])["Cor"]
+        st.markdown("### 🧭 Radar Estatístico")
         df_markov = engine.cadeias_de_markov(historico)
-        cor_atrasada, rodadas_atraso = engine.calcular_maior_atraso(historico)
+        ultima_cor = engine.classificar(historico[-1])["Cor"]
         
-        col_v1, col_v2, col_v3 = st.columns(3)
-        
-        with col_v1:
-            if ultima_cor in df_markov.index:
-                prob_prox_verm = df_markov.loc[ultima_cor, "Vermelho"]
-                prob_prox_preto = df_markov.loc[ultima_cor, "Preto"]
-                cor_sugerida = "Vermelho" if prob_prox_verm > prob_prox_preto else "Preto" if prob_prox_preto > prob_prox_verm else "Indefinido"
-                cor_fundo = "#FF4B4B" if cor_sugerida == "Vermelho" else "#262730" if cor_sugerida == "Preto" else "#555555"
-                st.markdown(f"<div class='radar-box' style='background-color: {cor_fundo};'>1. CADEIA DE MARKOV<br>Apostar no {cor_sugerida}</div>", unsafe_allow_html=True)
-                st.progress(int(prob_prox_verm), text=f"🔴 Vermelho: {prob_prox_verm}%")
-                st.progress(int(prob_prox_preto), text=f"⚫ Preto: {prob_prox_preto}%")
-        
-        with col_v2:
-            if rodadas_atraso >= 3:
-                st.markdown(f"<div class='radar-box' style='background-color: #FFC107; color: black;'>2. PRESSÃO MATEMÁTICA<br>Apostar no {cor_atrasada}</div>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"<div class='radar-box' style='background-color: #555555;'>2. PRESSÃO MATEMÁTICA<br>Mesa Equilibrada</div>", unsafe_allow_html=True)
-
-        with col_v3:
-            duzias = [engine.classificar(n)["Duzia"] for n in historico if engine.classificar(n)["Duzia"] != "Zero"]
-            if duzias:
-                duzia_quente = Counter(duzias).most_common(1)[0][0]
-                st.markdown(f"<div class='radar-box' style='background-color: #00E676; color: black;'>3. ZONA CONTÍNUA<br>Apostar na {duzia_quente}</div>", unsafe_allow_html=True)
-
+        if ultima_cor in df_markov.index:
+            pv, pp = df_markov.loc[ultima_cor, "Vermelho"], df_markov.loc[ultima_cor, "Preto"]
+            sugerida = "Vermelho" if pv > pp else "Preto" if pp > pv else "Nenhuma"
+            st.markdown(f"<div class='radar-box' style='background-color: {'#FF4B4B' if sugerida=='Vermelho' else '#262730'};'>1. MARKOV: Apostar no {sugerida}</div>", unsafe_allow_html=True)
+            
     st.divider()
     st.markdown("### 📊 Auditoria Quantitativa")
-    aba1, aba2, aba3 = st.tabs(["Física (Histograma de Saltos)", "Cilindro (Racetrack)", "Transição de Probabilidade"])
-    
+    aba1, aba2, aba3 = st.tabs(["Física (Saltos)", "Pista", "Transições"])
     with aba1:
-        saltos = engine.calcular_saltos(historico)
-        if saltos:
-            fig_saltos = px.histogram(x=saltos, nbins=37, labels={"x": "Distância de Salto (Casas)", "y": "Frequência"})
-            fig_saltos.update_layout(template="plotly_dark", title="Perfil Físico de Lançamento do Croupier")
-            st.plotly_chart(fig_saltos, use_container_width=True)
-
+        if 'saltos' in locals() and saltos:
+            st.plotly_chart(px.histogram(x=saltos, nbins=37, title="Perfil Físico"), use_container_width=True)
     with aba2:
-        setores = [engine.classificar_setor_pista(n) for n in historico]
-        contagem_setores = Counter(setores)
-        fig_pista = px.pie(names=list(contagem_setores.keys()), values=list(contagem_setores.values()), hole=0.4,
-                           color=list(contagem_setores.keys()),
-                           color_discrete_map={"Jeu Zéro": "#2ECC40", "Voisins": "#0074D9", "Orphelins": "#FF851B", "Tiers": "#B10DC9"})
-        fig_pista.update_layout(template="plotly_dark", title="Frequência Real de Queda por Setor")
-        st.plotly_chart(fig_pista, use_container_width=True)
-
+        if 'contagem' in locals() and contagem:
+            st.plotly_chart(px.pie(names=list(contagem.keys()), values=list(contagem.values()), hole=0.4), use_container_width=True)
     with aba3:
-        df_markov = engine.cadeias_de_markov(historico)
-        if not df_markov.empty:
-            fig_heat = px.imshow(df_markov, text_auto=True, color_continuous_scale="Viridis", title="Mapa Térmico de Mudança de Cor")
-            st.plotly_chart(fig_heat, use_container_width=True)
+        if 'df_markov' in locals() and not df_markov.empty:
+            st.plotly_chart(px.imshow(df_markov, text_auto=True), use_container_width=True)
