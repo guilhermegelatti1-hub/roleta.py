@@ -5,7 +5,7 @@ from collections import Counter
 import re
 
 # ==========================================
-# 1. MOTOR MEGA ROULETTE (Otimizado por Zonas)
+# 1. MOTOR MEGA ROULETTE (Com Previsão Algorítmica)
 # ==========================================
 class MegaRouletteEngine:
     def __init__(self):
@@ -47,6 +47,36 @@ class MegaRouletteEngine:
         idx = self.RODA.index(n)
         return [self.RODA[(idx + i) % 37] for i in range(-2, 3)]
 
+    def prever_proxima_jogada(self, historico):
+        """
+        Identifica os números e setores para definir uma jogada preditiva com 2 vizinhos.
+        Lógica extraída da análise de padrões da roda.
+        """
+        if len(historico) < 5:
+            return None, None, []
+            
+        # 1. Identificar os setores do histórico recente
+        setores = [self.classificar_setor_pista(n) for n in historico if self.classificar_setor_pista(n) != "Erro"]
+        if not setores:
+            return None, None, []
+            
+        # 2. Descobrir qual é o Setor/Tier que está a favorecer
+        setor_alvo = Counter(setores).most_common(1)[0][0]
+        
+        # 3. Filtrar apenas os números que saíram DENTRO desse setor alvo
+        numeros_no_setor = [n for n in historico if self.classificar_setor_pista(n) == setor_alvo]
+        
+        # 4. Encontrar o número mais repetido desse setor (o nosso "epicentro")
+        if numeros_no_setor:
+            numero_epicentro = Counter(numeros_no_setor).most_common(1)[0][0]
+        else:
+            numero_epicentro = historico[-1] # Fallback de segurança
+            
+        # 5. Definir a jogada com o número alvo + 2 vizinhos físicos
+        jogada_preditiva = self.obter_zona_vizinhos(numero_epicentro)
+        
+        return setor_alvo, numero_epicentro, jogada_preditiva
+
 # ==========================================
 # 2. INICIALIZAÇÃO DA APP E CSS
 # ==========================================
@@ -54,9 +84,11 @@ st.set_page_config(page_title="Tracker Mega Roulette", layout="wide", initial_si
 
 engine = MegaRouletteEngine()
 
+# Inicializa o histórico na memória da sessão
 if 'historico_quant' not in st.session_state:
     st.session_state.historico_quant = []
 
+# Estilos Visuais para as Caixas
 st.markdown("""
     <style>
     .mega-box-global { padding: 20px; border-radius: 10px; background: linear-gradient(135deg, #1f4037 0%, #99f2c8 100%); color: black; text-align: center; font-weight: bold; border: 2px solid white;}
@@ -75,7 +107,7 @@ def submeter_texto_rapido():
         numeros = re.findall(r'\b([0-9]|[1-2][0-9]|3[0-6])\b', entrada)
         if numeros:
             st.session_state.historico_quant.extend([int(n) for n in numeros])
-            # Mantemos o limite de segurança de 500 para evitar que o PC fique lento
+            # Mantemos o limite de segurança de 500
             if len(st.session_state.historico_quant) > 500:
                 st.session_state.historico_quant = st.session_state.historico_quant[-500:]
         st.session_state.input_texto_rapido = "" 
@@ -84,15 +116,13 @@ with st.sidebar:
     st.title("⚡ Mega Roulette")
     st.write("📈 **Parâmetros de Análise:**")
     
-    # Novo slider para a Janela Global (começa em 20 como pediste)
+    # Sliders dinâmicos para controlo de janelas de histórico
     janela_global = st.slider("Tamanho do Histórico Global", min_value=10, max_value=100, value=20, help="Quantas jogadas analisar para ver os 4 lados (recomendado: 20).")
-    
-    # Slider para a janela recente
-    janela_recente = st.slider("Tamanho do Ciclo Curto (Vizinhos)", min_value=3, max_value=15, value=5, help="Quantos números usar para procurar o ciclo de vizinhos recente.")
+    janela_recente = st.slider("Tamanho do Ciclo Curto", min_value=3, max_value=15, value=5, help="Quantos números usar para procurar o ciclo e fazer a previsão.")
     
     st.divider()
 
-    aba_teclado, aba_texto = st.tabs(["🎛️ Teclado Casino", "⌨️ Texto"])
+    aba_teclado, aba_texto = st.tabs(["🎛️ Teclado", "⌨️ Texto"])
     
     with aba_teclado:
         def add_num(n):
@@ -135,46 +165,42 @@ with st.sidebar:
         st.info("Aguardando sorteios...")
 
 # ==========================================
-# 4. DASHBOARD (ANÁLISE DE ZONAS E CICLOS)
+# 4. DASHBOARD (ANÁLISE E PREVISÃO)
 # ==========================================
 historico_completo = st.session_state.historico_quant
 n_jogadas = len(historico_completo)
 
-st.title("🎯 Radares de Zona (Multiplicadores)")
+st.title("🎯 Radares de Zona e Previsão")
 
-# Começa a analisar logo aos 5 números registados para ser muito mais rápido!
 if n_jogadas < 5:
-    st.warning("Insere pelo menos 5 números para iniciar a análise espacial das zonas.")
+    st.warning("Insere pelo menos 5 números para iniciar a análise de previsão.")
 else:
-    # 1. SLICING: Análise Global flexível (Agora baseada em 20 por padrão)
+    # Preparação das listas fatiadas baseadas nos sliders
     historico_global_atual = historico_completo[-janela_global:]
     setores_global = [engine.classificar_setor_pista(n) for n in historico_global_atual if engine.classificar_setor_pista(n) != "Erro"]
     
-    # 2. SLICING: Análise Recente (Ciclo de Vizinhos)
     historico_recente = historico_completo[-janela_recente:]
     
     col_recente, col_global = st.columns(2)
     
     with col_recente:
-        st.markdown("### 🔥 CICLO CURTO (2 VIZINHOS)")
-        st.caption(f"Analisando o padrão físico das últimas {len(historico_recente)} jogadas.")
+        st.markdown("### 🔮 PREVISÃO ALGORÍTMICA")
+        st.caption(f"Baseado na tendência das últimas {len(historico_recente)} jogadas.")
         
-        # O Motor avalia a zona do último número que saiu (Ele + 2 vizinhos)
-        ultimo_numero = historico_recente[-1]
-        zona_alvo = engine.obter_zona_vizinhos(ultimo_numero)
+        # O Motor corre a lógica de previsão com base na janela recente
+        setor_alvo, epicentro, jogada_preditiva = engine.prever_proxima_jogada(historico_recente)
         
-        # Verifica quantos acertos recentes caíram dentro desta micro-zona
-        acertos_na_zona = sum(1 for n in historico_recente if n in zona_alvo)
-        forca_ciclo = (acertos_na_zona / len(historico_recente)) * 100
-        
-        st.markdown(f"""
-        <div class='mega-box-recente'>
-            ALVO PROJETADO PELO ÚLTIMO SORTEIO<br>
-            <i>Baseado no {ultimo_numero} e seus vizinhos na roda. Força do ciclo: {forca_ciclo:.0f}%</i><br><br>
-            <h3 style='color: white;'>{zona_alvo}</h3>
-            <p style='color: #FFD700; font-size: 14px;'>Custo da ronda: 5 fichas</p>
-        </div>
-        """, unsafe_allow_html=True)
+        if setor_alvo and jogada_preditiva:
+            st.markdown(f"""
+            <div class='mega-box-recente'>
+                ALVO DO SISTEMA: {setor_alvo.upper()}<br>
+                <i>O padrão favorece o número {epicentro}. Cobre o epicentro + 2 vizinhos.</i><br><br>
+                <h3 style='color: white;'>{jogada_preditiva}</h3>
+                <p style='color: #FFD700; font-size: 14px;'>Custo da ronda: 5 fichas</p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.info("A aguardar dados suficientes no ciclo curto para previsão.")
             
     with col_global:
         st.markdown("### 📊 ZONA DOMINANTE (4 LADOS)")
@@ -196,7 +222,7 @@ else:
 
     st.divider()
 
-    # Gráficos da Análise Cruzada
+    # Gráficos e Auditoria Visual
     aba1, aba2 = st.tabs([f"Estatística dos 4 Lados (Últimos {len(historico_global_atual)})", "Histórico de Repetição de Lados"])
     
     with aba1:
@@ -210,7 +236,7 @@ else:
             
     with aba2:
         if setores_global:
-            st.write("Visualização de onde a bola caiu nos 4 lados da roda na janela de análise atual.")
+            st.write("Mapa em tempo real das quedas de bola, classificado pelos 4 grandes setores da roda.")
             df_setores = pd.DataFrame({"Jogada": range(1, len(setores_global) + 1), "Lado da Roleta": setores_global})
             fig_linha = px.scatter(df_setores, x="Jogada", y="Lado da Roleta", color="Lado da Roleta")
             fig_linha.update_layout(template="plotly_dark", title="Mapa de Calor de Repetição")
