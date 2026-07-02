@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from collections import Counter
 import math
 import pytesseract
+from pytesseract import Output
 from PIL import Image, ImageEnhance, ImageOps
 import re
 
@@ -128,18 +129,15 @@ if 'historico_quant' not in st.session_state:
 engine = RoletaQuantEngine()
 
 # ==========================================
-# 3. BARRA LATERAL (ENTRADAS OTIMIZADAS)
+# 3. BARRA LATERAL (ENTRADAS & OCR 2.0 GEOMÉTRICO)
 # ==========================================
-
-# Nova função ultra-rápida para texto limpo (Aceita 1 número ou vários)
 def submeter_texto_rapido():
     entrada = st.session_state.input_texto_rapido
     if entrada:
-        # Extrai todos os números válidos (0-36) da string digitada
         numeros = re.findall(r'\b([0-9]|[1-2][0-9]|3[0-6])\b', entrada)
         if numeros:
             st.session_state.historico_quant.extend([int(n) for n in numeros])
-        st.session_state.input_texto_rapido = "" # Limpa a caixa
+        st.session_state.input_texto_rapido = "" 
 
 with st.sidebar:
     st.markdown("### 🎮 Modo de Análise")
@@ -151,36 +149,75 @@ with st.sidebar:
     aba_ocr, aba_texto = st.tabs(["📸 Colar Print", "⌨️ Digitação Rápida"])
     
     with aba_ocr:
-        st.info("**Instruções:** Usa o `Windows + Shift + S`. Recorta apenas a grelha dos números. Clica na caixa abaixo e dá `Ctrl + V`.")
+        st.info("**Instruções:** Usa `Windows + Shift + S`. Recorta a grelha e faz `Ctrl + V`.")
         imagem_upload = st.file_uploader("", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
         
         if imagem_upload is not None:
             try:
                 imagem = Image.open(imagem_upload).convert('RGB')
                 
-                # --- NOVO FILTRO DE RAIO-X PARA NEON/CASSINO ---
-                # 1. Upscale brutal
+                # --- PROCESSAMENTO 2.0 (Sem criar borrões pretos) ---
+                # 1. Upscale
                 imagem = imagem.resize((imagem.width * 3, imagem.height * 3), Image.Resampling.LANCZOS)
-                # 2. Aumentar contraste das cores antes de remover a cor
-                imagem = ImageEnhance.Contrast(imagem).enhance(3.0)
-                # 3. Tons de Cinza
+                # 2. Tons de Cinza 
                 img_gray = imagem.convert('L')
-                # 4. Binarização Extrema (Força os números brilhantes a ficarem brancos puros e o fundo preto)
-                limite = 100
-                img_bin = img_gray.point(lambda p: 255 if p > limite else 0)
-                # 5. Inverter (Tesseract adora fundo branco com letras pretas)
-                img_final = ImageOps.invert(img_bin)
+                # 3. Inversão (Fundo preto do casino vira branco suave)
+                img_invertida = ImageOps.invert(img_gray)
+                # 4. Aumento de Contraste Saudável
+                img_final = ImageEnhance.Contrast(img_invertida).enhance(2.5)
                 
-                # MOSTRAR AO UTILIZADOR COMO A IA ESTÁ A VER O ECRÃ
-                st.image(img_final, caption="Visão Raio-X da Inteligência Artificial", use_container_width=True)
+                st.image(img_final, caption="Visão Raio-X Limpa (IA a ler)", use_container_width=True)
                 
-                # Leitura focada em blocos de texto (PSM 6)
-                config_tesseract = r'--psm 6 -c tessedit_char_whitelist=0123456789'
-                texto_bruto = pytesseract.image_to_string(img_final, config=config_tesseract)
+                # --- MAPEAMENTO ESPACIAL 2D (A CORREÇÃO DO ERRO) ---
+                # O PSM 11 lê os números onde quer que estejam espalhados no ecrã
+                config_tesseract = r'--psm 11 -c tessedit_char_whitelist=0123456789'
+                dados = pytesseract.image_to_data(img_final, output_type=Output.DICT, config=config_tesseract)
                 
-                # Ignora Multiplicadores gigantes (ex: 200x) porque só aceita de 0 a 36!
-                numeros_detectados = re.findall(r'\b([0-9]|[1-2][0-9]|3[0-6])\b', texto_bruto)
-                numeros_limpos = [int(n) for n in numeros_detectados]
+                itens_validos = []
+                for i in range(len(dados['text'])):
+                    texto = dados['text'][i].strip()
+                    confianca = int(dados['conf'][i]) if str(dados['conf'][i]).lstrip('-').isdigit() else 0
+                    
+                    if texto.isdigit() and confianca > 30: # Ignora o "lixo" com pouca certeza
+                        num = int(texto)
+                        # Ignora multiplicadores como o 50 ou 200, aceita apenas de 0 a 36
+                        if 0 <= num <= 36:
+                            itens_validos.append({
+                                'num': num,
+                                'left': dados['left'][i], # Posição X
+                                'top': dados['top'][i]    # Posição Y
+                            })
+                
+                numeros_limpos = []
+                
+                if itens_validos:
+                    # 1º Passo: Ordenar todos os números do print de cima para baixo
+                    itens_validos.sort(key=lambda x: x['top'])
+                    
+                    linhas = []
+                    linha_atual = []
+                    topo_referencia = None
+                    
+                    # 2º Passo: Agrupar números que partilham a mesma linha física
+                    for item in itens_validos:
+                        if topo_referencia is None:
+                            linha_atual.append(item)
+                            topo_referencia = item['top']
+                        # Tolerância de 35 pixeis de altura para pertencerem à mesma linha
+                        elif abs(item['top'] - topo_referencia) < 35:
+                            linha_atual.append(item)
+                        else:
+                            linhas.append(linha_atual)
+                            linha_atual = [item]
+                            topo_referencia = item['top']
+                    if linha_atual:
+                        linhas.append(linha_atual)
+                        
+                    # 3º Passo: Ordenar os números dentro de cada linha da esquerda para a direita
+                    for linha in linhas:
+                        linha.sort(key=lambda x: x['left'])
+                        for item in linha:
+                            numeros_limpos.append(item['num'])
                 
                 if numeros_limpos:
                     st.success(f"**Apanhei {len(numeros_limpos)} números!**")
@@ -192,17 +229,16 @@ with st.sidebar:
                             st.session_state.historico_quant.extend(numeros_limpos)
                             st.rerun()
                     with col_b2:
-                        if st.button("🔄 Inverter Ordem", help="Usa isto se a grelha ler os números de trás para a frente", use_container_width=True):
+                        if st.button("🔄 Inverter", help="Se o casino ordenar o mais recente à esquerda", use_container_width=True):
                             st.session_state.historico_quant.extend(reversed(numeros_limpos))
                             st.rerun()
                 else:
-                    st.error("Falha na leitura. O print tem texto a mais misturado (chat, caras)?")
+                    st.error("A IA não conseguiu agrupar os números de forma coerente.")
             except Exception as e:
                 st.error("Erro interno. Tenta fazer o recorte apenas da tabela.")
 
     with aba_texto:
         st.write("Sem bugs. Digita 1 número e dá Enter, ou vários separados por espaço (ex: `12 5 36 0`).")
-        # Substituí o number_input bugado por um text_input fluido
         st.text_input("Números:", key="input_texto_rapido", on_change=submeter_texto_rapido)
 
     st.divider()
@@ -258,12 +294,9 @@ else:
     else:
         st.info(f"Integridade da Mesa: Nível Saudável (Qui-Quadrado: {qui_quadrado:.1f}/50.99).")
 
-    # ==========================================
-    # RAMIFICAÇÃO: MODO CLÁSSICO vs MODO MEGA
-    # ==========================================
     if modo_jogo == "Mega Roulette (Multiplicadores)":
         st.markdown("### ⚡ Estratégia de Cobertura Mega Roulette")
-        st.write("Atenção: Para ganhares os multiplicadores, tens de fazer **Apostas Plenas (Straight Up)** nestes números. Evita apostas exteriores (Cores/Dúzias).")
+        st.write("Atenção: Para ganhares os multiplicadores, tens de fazer **Apostas Plenas (Straight Up)** nestes números.")
         
         setores = [engine.classificar_setor_pista(n) for n in historico]
         contagem_setores = Counter(setores)
@@ -293,7 +326,6 @@ else:
         st.markdown("*(No Modo Mega, o Radar de Cores e Dúzias é desativado para focar na captura de multiplicadores)*")
 
     else:
-        # MODO CLÁSSICO
         st.markdown("### 🕵️‍♂️ Assinatura do Croupier (Memória Muscular)")
         
         saltos = engine.calcular_saltos(historico)
@@ -362,9 +394,6 @@ else:
                 duzia_quente = Counter(duzias).most_common(1)[0][0]
                 st.markdown(f"<div class='radar-box' style='background-color: #00E676; color: black;'>3. ZONA CONTÍNUA<br>Apostar na {duzia_quente}</div>", unsafe_allow_html=True)
 
-    # ==========================================
-    # ABAS DE AUDITORIA 
-    # ==========================================
     st.divider()
     st.markdown("### 📊 Auditoria Quantitativa")
     aba1, aba2, aba3 = st.tabs(["Física (Histograma de Saltos)", "Cilindro (Racetrack)", "Transição de Probabilidade"])
