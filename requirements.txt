@@ -2,5 +2,6 @@ streamlit
 pandas
 numpy
 plotly
-pytesseract
 Pillow
+easyocr
+opencv-python-headless
