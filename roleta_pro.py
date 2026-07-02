@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from collections import Counter
 import math
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageOps
 import re
 
 # ==========================================
@@ -18,7 +18,6 @@ class RoletaQuantEngine:
                      5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
         self.VERMELHOS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
         
-        # Mapeamento para Apostas Plenas (Straight Up) no Modo Mega
         self.SETORES_PLENOS = {
             "Jeu Zéro": [12, 35, 3, 26, 0, 32, 15],
             "Voisins": [22, 18, 29, 7, 28, 19, 4, 21, 2, 25],
@@ -129,7 +128,7 @@ if 'historico_quant' not in st.session_state:
 engine = RoletaQuantEngine()
 
 # ==========================================
-# 3. BARRA LATERAL 
+# 3. BARRA LATERAL (Nova Visão OCR Implacável)
 # ==========================================
 def registar_jogada():
     num = st.session_state.input_roleta
@@ -138,41 +137,63 @@ def registar_jogada():
         st.session_state.input_roleta = None
 
 with st.sidebar:
-    # SELETOR DE MODO DE JOGO
     st.markdown("### 🎮 Modo de Análise")
     modo_jogo = st.radio("Escolhe a tua mesa:", ["Clássica (Europeia/Francesa)", "Mega Roulette (Multiplicadores)"], index=0, label_visibility="collapsed")
     st.divider()
 
     st.title("⚙️ Inserir Dados")
-    
-    aba_manual, aba_ocr = st.tabs(["⌨️ Digitar", "📸 Ler Imagem (Print)"])
-    
-    with aba_manual:
-        st.write("Digita o número e prime **ENTER**.")
-        st.number_input("Número Sorteado (0-36):", min_value=0, max_value=36, step=1, value=None, key="input_roleta", on_change=registar_jogada)
+    aba_ocr, aba_manual = st.tabs(["📸 Print Rápido", "⌨️ Digitar"])
     
     with aba_ocr:
-        st.write("Cola o print do histórico do casino.")
+        st.info("**INSTRUÇÕES:**\n1. Tira o Print APENAS à barra do histórico (tenta não apanhar o chat ou a cara da crupiê).\n2. Clica na caixa abaixo e faz `Ctrl + V`.")
         imagem_upload = st.file_uploader("", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
         
         if imagem_upload is not None:
             try:
+                # ---------------------------------------------------------
+                # FILTRO DE VISÃO COMPUTACIONAL (RAIO-X PARA CASINOS)
+                # ---------------------------------------------------------
                 imagem = Image.open(imagem_upload)
-                imagem_pb = imagem.convert('L')
-                texto_bruto = pytesseract.image_to_string(imagem_pb, config='--psm 11')
+                
+                # 1. Upscale brutal (3x maior) para os pixeis ficarem nítidos
+                nova_largura = imagem.width * 3
+                nova_altura = imagem.height * 3
+                imagem_redimensionada = imagem.resize((nova_largura, nova_altura), Image.Resampling.LANCZOS)
+                
+                # 2. Remoção total de cor (Tons de Cinza)
+                imagem_pb = imagem_redimensionada.convert('L')
+                
+                # 3. Contraste Máximo (separar bem o fundo do texto)
+                melhorador = ImageEnhance.Contrast(imagem_pb)
+                imagem_contraste = melhorador.enhance(3.0)
+                
+                # 4. Inversão de Cores (O Tesseract adora fundo branco e letras pretas)
+                imagem_final = ImageOps.invert(imagem_contraste)
+                
+                # 5. Whitelist Absoluta (A IA está proibida de ler letras, APENAS números de 0 a 9)
+                # O PSM 6 assume que o print é um bloco uniforme de texto.
+                config_tesseract = r'--psm 6 -c tessedit_char_whitelist=0123456789'
+                texto_bruto = pytesseract.image_to_string(imagem_final, config=config_tesseract)
+                
+                # Expressão Regular super estrita (Apanha números avulsos de 0 a 36)
                 numeros_detectados = re.findall(r'\b([0-9]|[1-2][0-9]|3[0-6])\b', texto_bruto)
                 numeros_limpos = [int(n) for n in numeros_detectados]
                 
                 if numeros_limpos:
-                    st.success(f"**A IA leu {len(numeros_limpos)} números:**")
+                    st.success(f"**Sucesso! IA leu {len(numeros_limpos)} números:**")
                     st.info(f"{numeros_limpos}")
-                    if st.button("➕ Confirmar e Injetar"):
+                    if st.button("✅ Injetar no Motor Estatístico", use_container_width=True):
                         st.session_state.historico_quant.extend(numeros_limpos)
                         st.rerun()
                 else:
-                    st.error("Nenhum número legível encontrado.")
+                    st.error("A IA não detetou números válidos (0-36). O print tem muito ruído ao redor?")
+                    
             except Exception as e:
-                st.error("Erro no OCR. Verificaste o packages.txt?")
+                st.error("Erro interno no motor OCR. Tenta de novo.")
+
+    with aba_manual:
+        st.write("Se faltar algum, digita e prime **ENTER**.")
+        st.number_input("Número Sorteado (0-36):", min_value=0, max_value=36, step=1, value=None, key="input_roleta", on_change=registar_jogada)
 
     st.divider()
     
@@ -237,7 +258,6 @@ else:
         setores = [engine.classificar_setor_pista(n) for n in historico]
         contagem_setores = Counter(setores)
         
-        # Ignora "Erro" se a bola caiu fora dos setores padrão no mapeamento
         if "Erro" in contagem_setores:
             del contagem_setores["Erro"]
             
@@ -263,7 +283,7 @@ else:
         st.markdown("*(No Modo Mega, o Radar de Cores e Dúzias é desativado para focar na captura de multiplicadores)*")
 
     else:
-        # MODO CLÁSSICO (O código normal)
+        # MODO CLÁSSICO
         st.markdown("### 🕵️‍♂️ Assinatura do Croupier (Memória Muscular)")
         
         saltos = engine.calcular_saltos(historico)
@@ -333,7 +353,7 @@ else:
                 st.markdown(f"<div class='radar-box' style='background-color: #00E676; color: black;'>3. ZONA CONTÍNUA<br>Apostar na {duzia_quente}</div>", unsafe_allow_html=True)
 
     # ==========================================
-    # ABAS DE AUDITORIA (Comuns aos dois modos)
+    # ABAS DE AUDITORIA 
     # ==========================================
     st.divider()
     st.markdown("### 📊 Auditoria Quantitativa")
