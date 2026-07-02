@@ -103,23 +103,25 @@ engine = RoletaQuantEngine()
 
 if 'historico_quant' not in st.session_state:
     st.session_state.historico_quant = []
+    
+if 'ocr_texto_bruto' not in st.session_state:
+    st.session_state.ocr_texto_bruto = ""
 
 st.markdown("""
     <style>
     .stMetric { background-color: #1E1E1E; padding: 15px; border-radius: 8px; border-left: 5px solid #00E676;}
     .radar-box { padding: 15px; border-radius: 10px; margin-bottom: 10px; color: white; text-align: center; font-weight: bold;}
-    .pista-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #1f4037 0%, #99f2c8 100%); color: black; text-align: center; font-weight: bold; border: 2px solid white;}
-    .alvo-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #FF4136 0%, #FF851B 100%); color: white; text-align: center; font-weight: bold; border: 2px solid white;}
-    .mega-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #8A2BE2 0%, #FF00FF 100%); color: white; text-align: center; font-weight: bold; border: 2px solid #FFD700;}
+    .pista-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #1f4037 0%, #99f2c8 100%); color: black; text-align: center; font-weight: bold;}
+    .alvo-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #FF4136 0%, #FF851B 100%); color: white; text-align: center; font-weight: bold;}
+    .mega-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #8A2BE2 0%, #FF00FF 100%); color: white; text-align: center; font-weight: bold;}
     .erratico-box { padding: 20px; border-radius: 15px; background-color: #333333; color: #aaaaaa; text-align: center; border: 1px dashed #777;}
     .vicio-box { padding: 25px; border-radius: 15px; background: linear-gradient(135deg, #FF0000 0%, #8B0000 100%); color: white; text-align: center; font-weight: bold; border: 3px dashed yellow; animation: blinker 2s linear infinite;}
     .historico-scroll { max-height: 300px; overflow-y: auto; padding: 15px; background-color: #111111; border-radius: 8px; border: 1px solid #333; font-size: 16px; line-height: 1.8;}
-    div[data-testid="stSidebar"] button { font-weight: bold; }
     </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. BARRA LATERAL (ENTRADAS 100% PRECISAS)
+# 3. BARRA LATERAL 
 # ==========================================
 def submeter_texto_rapido():
     entrada = st.session_state.input_texto_rapido
@@ -131,22 +133,91 @@ def submeter_texto_rapido():
 
 with st.sidebar:
     st.markdown("### 🎮 Modo de Análise")
-    modo_jogo = st.radio("Escolhe a tua mesa:", ["Clássica (Europeia/Francesa)", "Mega Roulette (Multiplicadores)"], index=0, label_visibility="collapsed")
+    modo_jogo = st.radio("Mesa:", ["Clássica (Europeia/Francesa)", "Mega Roulette"], index=0, label_visibility="collapsed")
     st.divider()
 
     st.title("⚙️ Inserir Dados")
-    aba_teclado, aba_ocr, aba_texto = st.tabs(["🎛️ Teclado", "📸 OCR", "⌨️ Digitar"])
+    aba_ocr, aba_teclado, aba_texto = st.tabs(["📸 OCR Editável", "🎛️ Teclado", "⌨️ Digitar"])
     
+    # ---------------------------------------------------------
+    # A SOLUÇÃO: OCR COM INTERCEÇÃO HUMANA
+    # ---------------------------------------------------------
+    with aba_ocr:
+        st.info("Faz `Ctrl + V` da grelha.")
+        imagem_upload = st.file_uploader("Upload", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
+        
+        if imagem_upload is not None:
+            if st.button("🔍 Extrair Números com IA", use_container_width=True):
+                with st.spinner('A decifrar o ecrã do casino...'):
+                    try:
+                        img_array = np.array(Image.open(imagem_upload).convert('RGB'))
+                        resultados = reader.readtext(img_array)
+                        
+                        itens_validos = []
+                        for (bbox, text, conf) in resultados:
+                            texto_limpo = re.sub(r'[^0-9]', '', text)
+                            if texto_limpo.isdigit() and conf > 0.3:
+                                num = int(texto_limpo)
+                                if 0 <= num <= 36:
+                                    centro_x = (bbox[0][0] + bbox[1][0]) / 2
+                                    centro_y = (bbox[0][1] + bbox[2][1]) / 2
+                                    itens_validos.append({'num': num, 'x': centro_x, 'y': centro_y})
+                        
+                        numeros_limpos = []
+                        if itens_validos:
+                            itens_validos.sort(key=lambda item: item['y'])
+                            linhas, linha_atual, y_referencia = [], [], None
+                            for item in itens_validos:
+                                if y_referencia is None:
+                                    linha_atual.append(item)
+                                    y_referencia = item['y']
+                                elif abs(item['y'] - y_referencia) < 30: 
+                                    linha_atual.append(item)
+                                else:
+                                    linhas.append(linha_atual)
+                                    linha_atual = [item]
+                                    y_referencia = item['y']
+                            if linha_atual: linhas.append(linha_atual)
+                                
+                            for linha in linhas:
+                                linha.sort(key=lambda item: item['x'])
+                                for item in linha:
+                                    numeros_limpos.append(item['num'])
+                        
+                        # Guardar resultado imperfeito numa variável para ser editada
+                        st.session_state.ocr_texto_bruto = " ".join(map(str, numeros_limpos))
+                    except Exception as e:
+                        st.error("Erro no processamento da imagem.")
+
+        # A CAIXA MÁGICA DE REVISÃO (Aparece se houver texto guardado)
+        if st.session_state.ocr_texto_bruto:
+            st.warning("⚠️ Os multiplicadores baralham a IA. Corrige os números que faltam abaixo antes de confirmar:")
+            texto_editado = st.text_input("Lista Lida (Edita aqui!):", value=st.session_state.ocr_texto_bruto)
+            
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                if st.button("✅ Confirmar Dados", type="primary", use_container_width=True):
+                    nums_finais = re.findall(r'\b([0-9]|[1-2][0-9]|3[0-6])\b', texto_editado)
+                    if nums_finais:
+                        st.session_state.historico_quant.extend([int(n) for n in nums_finais])
+                        st.session_state.ocr_texto_bruto = "" # Limpa a caixa após injetar
+                        st.rerun()
+            with col_b2:
+                if st.button("🔄 Inverter Ordem", use_container_width=True):
+                    nums_finais = re.findall(r'\b([0-9]|[1-2][0-9]|3[0-6])\b', texto_editado)
+                    if nums_finais:
+                        st.session_state.historico_quant.extend(reversed([int(n) for n in nums_finais]))
+                        st.session_state.ocr_texto_bruto = ""
+                        st.rerun()
+
     with aba_teclado:
-        st.write("Clica no número para inserir direto:")
-        def add_num(n):
-            st.session_state.historico_quant.append(n)
+        st.write("Inserção rápida sem erros:")
+        def add_num(n): st.session_state.historico_quant.append(n)
         if st.button("0 🟢", use_container_width=True): add_num(0)
         for row in range(12):
             c1, c2, c3 = st.columns(3)
             n1, n2, n3 = row * 3 + 1, row * 3 + 2, row * 3 + 3
-            def btn_label(num):
-                return f"{num} 🔴" if engine.classificar(num)["Cor"] == "Vermelho" else f"{num} ⚫"
+            def btn_label(num): return f"{num} 🔴" if engine.classificar(num)["Cor"] == "Vermelho" else f"{num} ⚫"
             with c1: 
                 if st.button(btn_label(n1), use_container_width=True): add_num(n1)
             with c2: 
@@ -154,68 +225,8 @@ with st.sidebar:
             with c3: 
                 if st.button(btn_label(n3), use_container_width=True): add_num(n3)
 
-    with aba_ocr:
-        st.info("Faz `Ctrl + V` do recorte da grelha.")
-        imagem_upload = st.file_uploader("Upload", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
-        
-        if imagem_upload is not None:
-            with st.spinner('O Deep Learning está a ler a imagem...'):
-                try:
-                    img_array = np.array(Image.open(imagem_upload).convert('RGB'))
-                    resultados = reader.readtext(img_array)
-                    itens_validos = []
-                    for (bbox, text, conf) in resultados:
-                        texto_limpo = re.sub(r'[^0-9]', '', text)
-                        if texto_limpo.isdigit() and conf > 0.4:
-                            num = int(texto_limpo)
-                            if 0 <= num <= 36:
-                                centro_x = (bbox[0][0] + bbox[1][0]) / 2
-                                centro_y = (bbox[0][1] + bbox[2][1]) / 2
-                                itens_validos.append({'num': num, 'x': centro_x, 'y': centro_y})
-                    
-                    numeros_limpos = []
-                    if itens_validos:
-                        itens_validos.sort(key=lambda item: item['y'])
-                        linhas = []
-                        linha_atual = []
-                        y_referencia = None
-                        for item in itens_validos:
-                            if y_referencia is None:
-                                linha_atual.append(item)
-                                y_referencia = item['y']
-                            elif abs(item['y'] - y_referencia) < 25: 
-                                linha_atual.append(item)
-                            else:
-                                linhas.append(linha_atual)
-                                linha_atual = [item]
-                                y_referencia = item['y']
-                        if linha_atual:
-                            linhas.append(linha_atual)
-                            
-                        for linha in linhas:
-                            linha.sort(key=lambda item: item['x'])
-                            for item in linha:
-                                numeros_limpos.append(item['num'])
-                    
-                    if numeros_limpos:
-                        st.success(f"Lidos {len(numeros_limpos)} números.")
-                        st.info(str(numeros_limpos))
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.button("✅ Injetar", use_container_width=True):
-                                st.session_state.historico_quant.extend(numeros_limpos)
-                                st.rerun()
-                        with col2:
-                            if st.button("🔄 Inverter", use_container_width=True):
-                                st.session_state.historico_quant.extend(reversed(numeros_limpos))
-                                st.rerun()
-                    else:
-                        st.error("A IA não detetou números de 0 a 36 válidos.")
-                except Exception as e:
-                    st.error(f"Erro no processamento da imagem.")
-
     with aba_texto:
-        st.write("Digita 1 número e dá Enter, ou vários (ex: `12 5 36 0`).")
+        st.write("Cola do chat (ex: `12 5 36 0`):")
         st.text_input("Números:", key="input_texto_rapido", on_change=submeter_texto_rapido)
 
     st.divider()
@@ -242,12 +253,13 @@ with st.sidebar:
         with col_limpar2:
             if st.button("🚨 Limpar Sessão", type="primary", use_container_width=True):
                 st.session_state.historico_quant = []
+                st.session_state.ocr_texto_bruto = ""
                 st.rerun()
     else:
         st.info("Nenhum número registado.")
 
 # ==========================================
-# 4. DASHBOARD VISUAL COMPLETO (SEM CORTES)
+# 4. DASHBOARD VISUAL COMPLETO 
 # ==========================================
 historico = st.session_state.historico_quant
 n_jogadas = len(historico)
@@ -263,7 +275,6 @@ if n_jogadas < LIMITE_CALIBRACAO:
 else:
     st.success(f"✅ Mesa Calibrada. {n_jogadas} jogadas em análise contínua.")
     
-    # 1. SCANNER DE FALHA MECÂNICA
     qui_quadrado, mesa_viciada, anomalias = engine.scanner_falha_mecanica(historico)
     
     if mesa_viciada:
@@ -277,7 +288,6 @@ else:
     else:
         st.info(f"Integridade da Mesa: Nível Saudável (Qui-Quadrado: {qui_quadrado:.1f}/50.99).")
 
-    # 2. RAMIFICAÇÃO: MEGA ROULETTE VS CLÁSSICA
     if modo_jogo == "Mega Roulette (Multiplicadores)":
         st.markdown("### ⚡ Estratégia de Cobertura Mega Roulette")
         st.write("Atenção: Para ganhares os multiplicadores, tens de fazer **Apostas Plenas (Straight Up)** nestes números.")
@@ -302,12 +312,7 @@ else:
             """, unsafe_allow_html=True)
         else:
             st.warning("Dados insuficientes para calcular o setor Mega.")
-            
-        st.divider()
-        st.markdown("*(No Modo Mega, o Radar de Cores e Dúzias é desativado para focar na captura de multiplicadores)*")
-
     else:
-        # MODO CLÁSSICO: A RESTAURAÇÃO DOS DADOS OMITIDOS
         st.markdown("### 🕵️‍♂️ Assinatura do Croupier (Memória Muscular)")
         saltos = engine.calcular_saltos(historico)
         if saltos:
@@ -338,7 +343,6 @@ else:
 
         st.divider()
 
-        # AS FAMOSAS 3 COLUNAS DE REGRESSO (Cores, Atrasos e Dúzias)
         st.markdown("### 🧭 Radar Estatístico Secundário")
         ultima_cor = engine.classificar(historico[-1])["Cor"]
         df_markov = engine.cadeias_de_markov(historico)
@@ -362,18 +366,15 @@ else:
                 st.warning(f"Atenção: O {cor_atrasada} não sai há {rodadas_atraso} rodadas consecutivas.")
             else:
                 st.markdown(f"<div class='radar-box' style='background-color: #555555;'>2. ESTATÍSTICA DE ATRASO<br>Mesa Equilibrada</div>", unsafe_allow_html=True)
-                st.info("As cores estão a alternar de forma natural. Sem pressão acumulada.")
 
         with col_v3:
             duzias = [engine.classificar(n)["Duzia"] for n in historico if engine.classificar(n)["Duzia"] != "Zero"]
             if duzias:
                 duzia_quente = Counter(duzias).most_common(1)[0][0]
                 st.markdown(f"<div class='radar-box' style='background-color: #00E676; color: black;'>3. ZONA CONTÍNUA<br>Apostar na {duzia_quente}</div>", unsafe_allow_html=True)
-                st.success(f"A {duzia_quente} é a tendência dominante atual no tapete de jogo.")
 
     st.divider()
     
-    # 3. ABAS DE AUDITORIA QUANTITATIVA
     st.markdown("### 📊 Auditoria Quantitativa (Raio-X da Mesa)")
     aba1, aba2, aba3 = st.tabs(["Física (Histograma de Saltos)", "Cilindro (Racetrack)", "Transição de Probabilidade (Markov)"])
     
@@ -396,5 +397,5 @@ else:
     with aba3:
         df_markov = engine.cadeias_de_markov(historico)
         if not df_markov.empty:
-            fig_heat = px.imshow(df_markov, text_auto=True, color_continuous_scale="Viridis", title="Mapa Térmico de Mudança de Cor (Eixo Y = Atual, Eixo X = Próximo)")
+            fig_heat = px.imshow(df_markov, text_auto=True, color_continuous_scale="Viridis", title="Mapa Térmico de Mudança de Cor")
             st.plotly_chart(fig_heat, use_container_width=True)
