@@ -120,6 +120,9 @@ st.markdown("""
     .erratico-box { padding: 20px; border-radius: 15px; background-color: #333333; color: #aaaaaa; text-align: center; border: 1px dashed #777;}
     .vicio-box { padding: 25px; border-radius: 15px; background: linear-gradient(135deg, #FF0000 0%, #8B0000 100%); color: white; text-align: center; font-weight: bold; border: 3px dashed yellow; animation: blinker 2s linear infinite;}
     .historico-scroll { max-height: 300px; overflow-y: auto; padding: 15px; background-color: #111111; border-radius: 8px; border: 1px solid #333; font-size: 16px; line-height: 1.8;}
+    
+    /* Ajustes para o Teclado de Botões ficarem mais compactos */
+    div[data-testid="stSidebar"] button { font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -129,7 +132,7 @@ if 'historico_quant' not in st.session_state:
 engine = RoletaQuantEngine()
 
 # ==========================================
-# 3. BARRA LATERAL (ENTRADAS & OCR 2.0 GEOMÉTRICO)
+# 3. BARRA LATERAL (ENTRADAS 100% PRECISAS)
 # ==========================================
 def submeter_texto_rapido():
     entrada = st.session_state.input_texto_rapido
@@ -146,30 +149,53 @@ with st.sidebar:
 
     st.title("⚙️ Inserir Dados")
     
-    aba_ocr, aba_texto = st.tabs(["📸 Colar Print", "⌨️ Digitação Rápida"])
+    aba_teclado, aba_texto, aba_ocr = st.tabs(["🎛️ Teclado", "⌨️ Digitar", "📸 OCR"])
     
-    with aba_ocr:
-        st.info("**Instruções:** Usa `Windows + Shift + S`. Recorta a grelha e faz `Ctrl + V`.")
-        imagem_upload = st.file_uploader("", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
+    # --- NOVO: TECLADO DE CRUPIÊ (Zero Bugs, 100% Rápido) ---
+    with aba_teclado:
+        st.write("Clica no número para inserir direto:")
         
+        # Função para adicionar o número via botão
+        def add_num(n):
+            st.session_state.historico_quant.append(n)
+            
+        # Botão do ZERO (Verde)
+        if st.button("0 🟢", use_container_width=True): add_num(0)
+        
+        # Grelha de 1 a 36
+        for row in range(12):
+            c1, c2, c3 = st.columns(3)
+            n1 = row * 3 + 1
+            n2 = row * 3 + 2
+            n3 = row * 3 + 3
+            
+            # Helper para colorir e colocar emoji
+            def btn_label(num):
+                cor = engine.classificar(num)["Cor"]
+                return f"{num} 🔴" if cor == "Vermelho" else f"{num} ⚫"
+            
+            with c1:
+                if st.button(btn_label(n1), use_container_width=True): add_num(n1)
+            with c2:
+                if st.button(btn_label(n2), use_container_width=True): add_num(n2)
+            with c3:
+                if st.button(btn_label(n3), use_container_width=True): add_num(n3)
+
+    with aba_texto:
+        st.write("Copia do chat ou digita rápido (ex: `12 5 36 0`):")
+        st.text_input("Números:", key="input_texto_rapido", on_change=submeter_texto_rapido)
+        
+    with aba_ocr:
+        st.warning("IA com dificuldade nas cores do casino. (Experimental)")
+        imagem_upload = st.file_uploader("", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
         if imagem_upload is not None:
             try:
                 imagem = Image.open(imagem_upload).convert('RGB')
-                
-                # --- PROCESSAMENTO 2.0 (Sem criar borrões pretos) ---
-                # 1. Upscale
                 imagem = imagem.resize((imagem.width * 3, imagem.height * 3), Image.Resampling.LANCZOS)
-                # 2. Tons de Cinza 
                 img_gray = imagem.convert('L')
-                # 3. Inversão (Fundo preto do casino vira branco suave)
                 img_invertida = ImageOps.invert(img_gray)
-                # 4. Aumento de Contraste Saudável
                 img_final = ImageEnhance.Contrast(img_invertida).enhance(2.5)
                 
-                st.image(img_final, caption="Visão Raio-X Limpa (IA a ler)", use_container_width=True)
-                
-                # --- MAPEAMENTO ESPACIAL 2D (A CORREÇÃO DO ERRO) ---
-                # O PSM 11 lê os números onde quer que estejam espalhados no ecrã
                 config_tesseract = r'--psm 11 -c tessedit_char_whitelist=0123456789'
                 dados = pytesseract.image_to_data(img_final, output_type=Output.DICT, config=config_tesseract)
                 
@@ -177,69 +203,48 @@ with st.sidebar:
                 for i in range(len(dados['text'])):
                     texto = dados['text'][i].strip()
                     confianca = int(dados['conf'][i]) if str(dados['conf'][i]).lstrip('-').isdigit() else 0
-                    
-                    if texto.isdigit() and confianca > 30: # Ignora o "lixo" com pouca certeza
+                    if texto.isdigit() and confianca > 30: 
                         num = int(texto)
-                        # Ignora multiplicadores como o 50 ou 200, aceita apenas de 0 a 36
                         if 0 <= num <= 36:
-                            itens_validos.append({
-                                'num': num,
-                                'left': dados['left'][i], # Posição X
-                                'top': dados['top'][i]    # Posição Y
-                            })
+                            itens_validos.append({'num': num, 'left': dados['left'][i], 'top': dados['top'][i]})
                 
                 numeros_limpos = []
-                
                 if itens_validos:
-                    # 1º Passo: Ordenar todos os números do print de cima para baixo
                     itens_validos.sort(key=lambda x: x['top'])
-                    
                     linhas = []
                     linha_atual = []
                     topo_referencia = None
-                    
-                    # 2º Passo: Agrupar números que partilham a mesma linha física
                     for item in itens_validos:
                         if topo_referencia is None:
                             linha_atual.append(item)
                             topo_referencia = item['top']
-                        # Tolerância de 35 pixeis de altura para pertencerem à mesma linha
                         elif abs(item['top'] - topo_referencia) < 35:
                             linha_atual.append(item)
                         else:
                             linhas.append(linha_atual)
                             linha_atual = [item]
                             topo_referencia = item['top']
-                    if linha_atual:
-                        linhas.append(linha_atual)
+                    if linha_atual: linhas.append(linha_atual)
                         
-                    # 3º Passo: Ordenar os números dentro de cada linha da esquerda para a direita
                     for linha in linhas:
                         linha.sort(key=lambda x: x['left'])
-                        for item in linha:
-                            numeros_limpos.append(item['num'])
+                        for item in linha: numeros_limpos.append(item['num'])
                 
                 if numeros_limpos:
-                    st.success(f"**Apanhei {len(numeros_limpos)} números!**")
-                    st.info(f"{numeros_limpos}")
-                    
+                    st.success(f"**Lidos:** {numeros_limpos}")
                     col_b1, col_b2 = st.columns(2)
                     with col_b1:
-                        if st.button("✅ Injetar Direto", use_container_width=True):
+                        if st.button("✅ Injetar", use_container_width=True):
                             st.session_state.historico_quant.extend(numeros_limpos)
                             st.rerun()
                     with col_b2:
-                        if st.button("🔄 Inverter", help="Se o casino ordenar o mais recente à esquerda", use_container_width=True):
+                        if st.button("🔄 Inverter", use_container_width=True):
                             st.session_state.historico_quant.extend(reversed(numeros_limpos))
                             st.rerun()
                 else:
-                    st.error("A IA não conseguiu agrupar os números de forma coerente.")
+                    st.error("Erro na leitura geométrica.")
             except Exception as e:
-                st.error("Erro interno. Tenta fazer o recorte apenas da tabela.")
-
-    with aba_texto:
-        st.write("Sem bugs. Digita 1 número e dá Enter, ou vários separados por espaço (ex: `12 5 36 0`).")
-        st.text_input("Números:", key="input_texto_rapido", on_change=submeter_texto_rapido)
+                st.error("Erro interno. Falha no OCR.")
 
     st.divider()
     
@@ -260,9 +265,20 @@ with st.sidebar:
         st.info("Nenhum número registado.")
         
     st.divider()
-    if st.button("🚨 Limpar Sessão", type="primary", use_container_width=True):
-        st.session_state.historico_quant = []
-        st.rerun()
+    
+    # ---------------------------------------------------------
+    # BOTÃO PARA REMOVER O ÚLTIMO NÚMERO (CORREÇÃO DE ERRO)
+    # ---------------------------------------------------------
+    col_limpar1, col_limpar2 = st.columns(2)
+    with col_limpar1:
+        if st.button("↩️ Apagar Último", use_container_width=True):
+            if len(st.session_state.historico_quant) > 0:
+                st.session_state.historico_quant.pop()
+                st.rerun()
+    with col_limpar2:
+        if st.button("🚨 Limpar Sessão", type="primary", use_container_width=True):
+            st.session_state.historico_quant = []
+            st.rerun()
 
 # ==========================================
 # 4. DASHBOARD VISUAL (DINÂMICO)
