@@ -5,6 +5,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 from collections import Counter
 import math
+import pytesseract
+from PIL import Image
+import re
 
 # ==========================================
 # 1. MOTOR QUANTITATIVO & FÍSICO (OOP)
@@ -118,7 +121,7 @@ if 'historico_quant' not in st.session_state:
 engine = RoletaQuantEngine()
 
 # ==========================================
-# 3. BARRA LATERAL (Entrada & Histórico)
+# 3. BARRA LATERAL (Entrada Rápida & OCR)
 # ==========================================
 def registar_jogada():
     num = st.session_state.input_roleta
@@ -128,10 +131,45 @@ def registar_jogada():
 
 with st.sidebar:
     st.title("⚙️ Inserir Dados")
-    st.write("Digita o número e prime **ENTER**.")
     
-    st.number_input("Número Sorteado (0-36):", min_value=0, max_value=36, step=1, value=None, key="input_roleta", on_change=registar_jogada)
+    # Aba para organizar Entrada Manual vs Upload
+    aba_manual, aba_ocr = st.tabs(["⌨️ Digitar", "📸 Ler Imagem (Print)"])
     
+    with aba_manual:
+        st.write("Digita o número e prime **ENTER**.")
+        st.number_input("Número Sorteado (0-36):", min_value=0, max_value=36, step=1, value=None, key="input_roleta", on_change=registar_jogada)
+    
+    with aba_ocr:
+        st.write("Cola ou faz upload do print do histórico do casino.")
+        imagem_upload = st.file_uploader("", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
+        
+        if imagem_upload is not None:
+            try:
+                # Processamento da Imagem
+                imagem = Image.open(imagem_upload)
+                # Converte para preto e branco para facilitar a leitura da IA
+                imagem_pb = imagem.convert('L')
+                
+                # O Tesseract extrai tudo o que for texto
+                texto_bruto = pytesseract.image_to_string(imagem_pb, config='--psm 11')
+                
+                # Expressão Regular: Procura estritamente por números entre 0 e 36
+                numeros_detectados = re.findall(r'\b([0-9]|[1-2][0-9]|3[0-6])\b', texto_bruto)
+                numeros_limpos = [int(n) for n in numeros_detectados]
+                
+                if numeros_limpos:
+                    st.success(f"**A IA leu {len(numeros_limpos)} números:**")
+                    st.info(f"{numeros_limpos}")
+                    st.warning("Verifica se a ordem e os valores estão corretos antes de inserir!")
+                    
+                    if st.button("➕ Confirmar e Injetar Dados"):
+                        st.session_state.historico_quant.extend(numeros_limpos)
+                        st.rerun()
+                else:
+                    st.error("A IA não conseguiu encontrar números legíveis de roleta neste print. Tenta recortar melhor a imagem.")
+            except Exception as e:
+                st.error("Erro no motor visual. Verificaste o ficheiro packages.txt?")
+
     st.divider()
     
     st.markdown("### 📜 Histórico da Sessão")
@@ -148,7 +186,7 @@ with st.sidebar:
         st.markdown(f"<div class='historico-scroll'>{texto_historico}</div>", unsafe_allow_html=True)
         st.caption(f"Total digitado: {len(historico_atual)} jogadas")
     else:
-        st.info("Nenhum número registado. Comece a digitar acima.")
+        st.info("Nenhum número registado.")
         
     st.divider()
     if st.button("🚨 Limpar Sessão", type="primary", use_container_width=True):
@@ -172,9 +210,6 @@ if n_jogadas < LIMITE_CALIBRACAO:
 else:
     st.success(f"✅ Mesa Calibrada. {n_jogadas} jogadas em análise contínua.")
     
-    # ---------------------------------------------------------
-    # SCANNER DE FALHA MECÂNICA (VÍCIO)
-    # ---------------------------------------------------------
     qui_quadrado, mesa_viciada, anomalias = engine.scanner_falha_mecanica(historico)
     
     if mesa_viciada:
@@ -190,9 +225,6 @@ else:
     else:
         st.info(f"Integridade da Mesa: Nível Saudável (Qui-Quadrado: {qui_quadrado:.1f}/50.99).")
 
-    # ---------------------------------------------------------
-    # DETETOR DE ASSINATURA DO CROUPIER (Com Filtro de Ruído)
-    # ---------------------------------------------------------
     st.markdown("### 🕵️‍♂️ Assinatura do Croupier (Memória Muscular)")
     
     saltos = engine.calcular_saltos(historico)
@@ -201,18 +233,16 @@ else:
         salto_mais_comum = contagem_saltos.most_common(1)[0]
         distancia_padrao = salto_mais_comum[0]
         
-        # MUDANÇA AQUI: Calcular se a "Zona de Queda" (+/- 2 casas) tem aderência suficiente
         saltos_na_zona = sum(1 for s in saltos if min(abs(s - distancia_padrao), 37 - abs(s - distancia_padrao)) <= 2)
         confianca_zona = (saltos_na_zona / len(saltos)) * 100
         
         col_f1, col_f2 = st.columns([1, 2])
         
-        # Se menos de 25% dos saltos caírem na mesma zona da roda, o crupiê é imprevisível
         if confianca_zona < 25.0:
             with col_f1:
                 st.metric("Distância Padrão", "Falhou", "Dispersão Elevada")
             with col_f2:
-                st.markdown("<div class='erratico-box'>❌ CRUPIÊ ERRÁTICO ❌<br>A força de lançamento varia demasiado (sem padrão físico seguro). Aguarde ou mude de mesa.</div>", unsafe_allow_html=True)
+                st.markdown("<div class='erratico-box'>❌ CRUPIÊ ERRÁTICO ❌<br>A força de lançamento varia demasiado.</div>", unsafe_allow_html=True)
         else:
             alvo, zona = engine.projetar_alvo(historico[-1], distancia_padrao)
             with col_f1:
@@ -222,9 +252,6 @@ else:
 
     st.divider()
 
-    # ---------------------------------------------------------
-    # ANÁLISE DA PISTA (RACETRACK)
-    # ---------------------------------------------------------
     st.markdown("### 🏎️ Análise da Pista (Racetrack)")
     
     setores = [engine.classificar_setor_pista(n) for n in historico]
@@ -239,9 +266,6 @@ else:
 
     st.divider()
 
-    # ---------------------------------------------------------
-    # SUGESTÕES DE PROBABILIDADE CLÁSSICA
-    # ---------------------------------------------------------
     st.markdown("### 🧭 Radar Estatístico Secundário")
     
     ultima_cor = engine.classificar(historico[-1])["Cor"]
@@ -258,7 +282,6 @@ else:
             cor_fundo = "#FF4B4B" if cor_sugerida == "Vermelho" else "#262730" if cor_sugerida == "Preto" else "#555555"
             
             st.markdown(f"<div class='radar-box' style='background-color: {cor_fundo};'>1. CADEIA DE MARKOV<br>Apostar no {cor_sugerida}</div>", unsafe_allow_html=True)
-            st.write(f"Após o {ultima_cor}, saiu:")
             st.progress(int(prob_prox_verm), text=f"🔴 Vermelho: {prob_prox_verm}%")
             st.progress(int(prob_prox_preto), text=f"⚫ Preto: {prob_prox_preto}%")
     
@@ -276,9 +299,6 @@ else:
 
     st.divider()
 
-    # ---------------------------------------------------------
-    # ABAS DE AUDITORIA
-    # ---------------------------------------------------------
     st.markdown("### 📊 Auditoria Quantitativa")
     aba1, aba2, aba3 = st.tabs(["Física (Histograma de Saltos)", "Cilindro (Racetrack)", "Transição de Probabilidade"])
     
