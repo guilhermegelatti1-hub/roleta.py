@@ -5,13 +5,15 @@ from collections import Counter
 import re
 
 # ==========================================
-# 1. MOTOR MEGA ROULETTE
+# 1. MOTOR MEGA ROULETTE (Otimizado por Zonas)
 # ==========================================
 class MegaRouletteEngine:
     def __init__(self):
+        # A ordem física exata da roleta
         self.RODA = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 
                      5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
         
+        # Mapeamento da roleta nos 4 lados principais
         self.SETORES_PLENOS = {
             "Jeu Zéro": [12, 35, 3, 26, 0, 32, 15],
             "Voisins": [22, 18, 29, 7, 28, 19, 4, 21, 2, 25],
@@ -30,6 +32,7 @@ class MegaRouletteEngine:
         return "Vermelho" if n in vermelhos else "Preto"
 
     def classificar_setor_pista(self, n):
+        """Identifica em qual dos 4 lados da roleta o número se encontra"""
         n = int(n)
         if n in self.JEU_ZERO: return "Jeu Zéro"
         if n in self.VOISINS: return "Voisins"
@@ -37,19 +40,12 @@ class MegaRouletteEngine:
         if n in self.TIERS: return "Tiers"
         return "Erro"
 
-    def calcular_saltos(self, historico):
-        if len(historico) < 2: return []
-        saltos = []
-        for i in range(len(historico)-1):
-            idx_atual = self.RODA.index(int(historico[i]))
-            idx_seguinte = self.RODA.index(int(historico[i+1]))
-            saltos.append((idx_seguinte - idx_atual) % 37)
-        return saltos
-
-    def projetar_alvo(self, ultimo_numero, salto_predito):
-        idx_alvo = (self.RODA.index(int(ultimo_numero)) + salto_predito) % 37
-        zona = [self.RODA[(idx_alvo + i) % 37] for i in range(-2, 3)]
-        return self.RODA[idx_alvo], zona
+    def obter_zona_vizinhos(self, n):
+        """Retorna o número e os seus 2 vizinhos de cada lado (zona de 5 números)"""
+        n = int(n)
+        if n not in self.RODA: return []
+        idx = self.RODA.index(n)
+        return [self.RODA[(idx + i) % 37] for i in range(-2, 3)]
 
 # ==========================================
 # 2. INICIALIZAÇÃO DA APP E CSS
@@ -71,7 +67,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. BARRA LATERAL (ENTRADA DE DADOS)
+# 3. BARRA LATERAL (ENTRADA DE DADOS E CONTROLOS)
 # ==========================================
 def submeter_texto_rapido():
     entrada = st.session_state.input_texto_rapido
@@ -79,11 +75,21 @@ def submeter_texto_rapido():
         numeros = re.findall(r'\b([0-9]|[1-2][0-9]|3[0-6])\b', entrada)
         if numeros:
             st.session_state.historico_quant.extend([int(n) for n in numeros])
+            # Mantemos o limite de segurança de 500 para evitar que o PC fique lento
+            if len(st.session_state.historico_quant) > 500:
+                st.session_state.historico_quant = st.session_state.historico_quant[-500:]
         st.session_state.input_texto_rapido = "" 
 
 with st.sidebar:
     st.title("⚡ Mega Roulette")
-    janela_recente = st.slider("Janela de Tendência Recente", min_value=5, max_value=20, value=10, help="Quantas jogadas atrás queremos analisar para apanhar a tendência atual?")
+    st.write("📈 **Parâmetros de Análise:**")
+    
+    # Novo slider para a Janela Global (começa em 20 como pediste)
+    janela_global = st.slider("Tamanho do Histórico Global", min_value=10, max_value=100, value=20, help="Quantas jogadas analisar para ver os 4 lados (recomendado: 20).")
+    
+    # Slider para a janela recente
+    janela_recente = st.slider("Tamanho do Ciclo Curto (Vizinhos)", min_value=3, max_value=15, value=5, help="Quantos números usar para procurar o ciclo de vizinhos recente.")
+    
     st.divider()
 
     aba_teclado, aba_texto = st.tabs(["🎛️ Teclado Casino", "⌨️ Texto"])
@@ -91,6 +97,9 @@ with st.sidebar:
     with aba_teclado:
         def add_num(n):
             st.session_state.historico_quant.append(n)
+            if len(st.session_state.historico_quant) > 500:
+                st.session_state.historico_quant = st.session_state.historico_quant[-500:]
+
         if st.button("0 🟢", use_container_width=True): add_num(0)
         for row in range(12):
             c1, c2, c3 = st.columns(3)
@@ -112,6 +121,7 @@ with st.sidebar:
     if len(st.session_state.historico_quant) > 0:
         hist = [f"**{n}**" for n in st.session_state.historico_quant]
         st.markdown(f"<div class='historico-scroll'>{' ➔ '.join(hist)}</div>", unsafe_allow_html=True)
+        st.caption(f"Registados: {len(st.session_state.historico_quant)} jogadas")
         col1, col2 = st.columns(2)
         with col1:
             if st.button("↩️ Desfazer", use_container_width=True):
@@ -125,69 +135,85 @@ with st.sidebar:
         st.info("Aguardando sorteios...")
 
 # ==========================================
-# 4. DASHBOARD (DUPLO MOTOR DE ANÁLISE)
+# 4. DASHBOARD (ANÁLISE DE ZONAS E CICLOS)
 # ==========================================
-historico = st.session_state.historico_quant
-n_jogadas = len(historico)
+historico_completo = st.session_state.historico_quant
+n_jogadas = len(historico_completo)
 
-st.title("🎯 Radares de Zona")
+st.title("🎯 Radares de Zona (Multiplicadores)")
 
+# Começa a analisar logo aos 5 números registados para ser muito mais rápido!
 if n_jogadas < 5:
-    st.warning("Insere pelo menos 5 números para iniciar a análise espacial.")
+    st.warning("Insere pelo menos 5 números para iniciar a análise espacial das zonas.")
 else:
-    # Preparação de Dados
-    setores_totais = [engine.classificar_setor_pista(n) for n in historico if engine.classificar_setor_pista(n) != "Erro"]
-    setores_recentes = setores_totais[-janela_recente:] # SLICING: Pega apenas os últimos X números
+    # 1. SLICING: Análise Global flexível (Agora baseada em 20 por padrão)
+    historico_global_atual = historico_completo[-janela_global:]
+    setores_global = [engine.classificar_setor_pista(n) for n in historico_global_atual if engine.classificar_setor_pista(n) != "Erro"]
+    
+    # 2. SLICING: Análise Recente (Ciclo de Vizinhos)
+    historico_recente = historico_completo[-janela_recente:]
     
     col_recente, col_global = st.columns(2)
     
     with col_recente:
-        st.markdown("### 🔥 TENDÊNCIA IMEDIATA")
-        st.caption(f"Análise das últimas {len(setores_recentes)} jogadas. Ideal para mudanças súbitas do croupier.")
+        st.markdown("### 🔥 CICLO CURTO (2 VIZINHOS)")
+        st.caption(f"Analisando o padrão físico das últimas {len(historico_recente)} jogadas.")
         
-        contagem_recente = Counter(setores_recentes)
-        if contagem_recente:
-            setor_hot_recente = contagem_recente.most_common(1)[0][0]
-            prob_recente = (contagem_recente[setor_hot_recente] / len(setores_recentes)) * 100
-            nums_recente = engine.SETORES_PLENOS[setor_hot_recente]
-            
-            st.markdown(f"""
-            <div class='mega-box-recente'>
-                ALERTA DE ZONA QUENTE: {setor_hot_recente.upper()}<br>
-                <i>Caiu aqui {prob_recente:.0f}% das vezes nas últimas jogadas.</i><br><br>
-                <h3 style='color: white;'>{nums_recente}</h3>
-            </div>
-            """, unsafe_allow_html=True)
+        # O Motor avalia a zona do último número que saiu (Ele + 2 vizinhos)
+        ultimo_numero = historico_recente[-1]
+        zona_alvo = engine.obter_zona_vizinhos(ultimo_numero)
+        
+        # Verifica quantos acertos recentes caíram dentro desta micro-zona
+        acertos_na_zona = sum(1 for n in historico_recente if n in zona_alvo)
+        forca_ciclo = (acertos_na_zona / len(historico_recente)) * 100
+        
+        st.markdown(f"""
+        <div class='mega-box-recente'>
+            ALVO PROJETADO PELO ÚLTIMO SORTEIO<br>
+            <i>Baseado no {ultimo_numero} e seus vizinhos na roda. Força do ciclo: {forca_ciclo:.0f}%</i><br><br>
+            <h3 style='color: white;'>{zona_alvo}</h3>
+            <p style='color: #FFD700; font-size: 14px;'>Custo da ronda: 5 fichas</p>
+        </div>
+        """, unsafe_allow_html=True)
             
     with col_global:
-        st.markdown("### 📊 PANORAMA GLOBAL")
-        st.caption(f"Análise das {n_jogadas} jogadas. Mostra a tendência longa da sessão.")
+        st.markdown("### 📊 ZONA DOMINANTE (4 LADOS)")
+        st.caption(f"Análise focada nos últimos {len(historico_global_atual)} números registados.")
         
-        contagem_global = Counter(setores_totais)
+        contagem_global = Counter(setores_global)
         if contagem_global:
             setor_hot_global = contagem_global.most_common(1)[0][0]
-            prob_global = (contagem_global[setor_hot_global] / n_jogadas) * 100
+            prob_global = (contagem_global[setor_hot_global] / len(setores_global)) * 100
             nums_global = engine.SETORES_PLENOS[setor_hot_global]
             
             st.markdown(f"""
             <div class='mega-box-global'>
-                ZONA DOMINANTE: {setor_hot_global.upper()}<br>
-                <i>Média geral de {prob_global:.0f}%.</i><br><br>
+                O LADO MAIS QUENTE DA MESA: {setor_hot_global.upper()}<br>
+                <i>Caiu neste quadrante {prob_global:.0f}% das vezes (amostra de {len(historico_global_atual)}).</i><br><br>
                 <h4>{nums_global}</h4>
             </div>
             """, unsafe_allow_html=True)
 
     st.divider()
 
-    # Gráfico Comparativo
-    aba1, aba2 = st.tabs(["Frequência (Últimas Jogadas)", "Frequência (Sessão Inteira)"])
+    # Gráficos da Análise Cruzada
+    aba1, aba2 = st.tabs([f"Estatística dos 4 Lados (Últimos {len(historico_global_atual)})", "Histórico de Repetição de Lados"])
+    
     with aba1:
-        fig_rec = px.bar(x=list(contagem_recente.keys()), y=list(contagem_recente.values()), 
-                         labels={"x": "Setor", "y": "Ocorrências"}, color_discrete_sequence=["#FFD700"])
-        fig_rec.update_layout(template="plotly_dark", title=f"Setores nas últimas {len(setores_recentes)} jogadas")
-        st.plotly_chart(fig_rec, use_container_width=True)
-        
+        if contagem_global:
+            fig_glob = px.pie(names=list(contagem_global.keys()), values=list(contagem_global.values()), hole=0.5,
+                              color_discrete_sequence=["#FF851B", "#0074D9", "#2ECC40", "#B10DC9"])
+            fig_glob.update_layout(template="plotly_dark", title=f"Distribuição da Roda (Janela de {len(historico_global_atual)})")
+            st.plotly_chart(fig_glob, use_container_width=True)
+        else:
+            st.write("Sem dados suficientes para o gráfico.")
+            
     with aba2:
-        fig_glob = px.pie(names=list(contagem_global.keys()), values=list(contagem_global.values()), hole=0.5)
-        fig_glob.update_layout(template="plotly_dark", title="Distribuição Geral da Sessão")
-        st.plotly_chart(fig_glob, use_container_width=True)
+        if setores_global:
+            st.write("Visualização de onde a bola caiu nos 4 lados da roda na janela de análise atual.")
+            df_setores = pd.DataFrame({"Jogada": range(1, len(setores_global) + 1), "Lado da Roleta": setores_global})
+            fig_linha = px.scatter(df_setores, x="Jogada", y="Lado da Roleta", color="Lado da Roleta")
+            fig_linha.update_layout(template="plotly_dark", title="Mapa de Calor de Repetição")
+            st.plotly_chart(fig_linha, use_container_width=True)
+        else:
+            st.write("Sem dados suficientes para o gráfico.")
