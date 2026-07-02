@@ -128,13 +128,18 @@ if 'historico_quant' not in st.session_state:
 engine = RoletaQuantEngine()
 
 # ==========================================
-# 3. BARRA LATERAL (Nova Visão OCR Implacável)
+# 3. BARRA LATERAL (ENTRADAS OTIMIZADAS)
 # ==========================================
-def registar_jogada():
-    num = st.session_state.input_roleta
-    if num is not None:
-        st.session_state.historico_quant.append(int(num))
-        st.session_state.input_roleta = None
+
+# Nova função ultra-rápida para texto limpo (Aceita 1 número ou vários)
+def submeter_texto_rapido():
+    entrada = st.session_state.input_texto_rapido
+    if entrada:
+        # Extrai todos os números válidos (0-36) da string digitada
+        numeros = re.findall(r'\b([0-9]|[1-2][0-9]|3[0-6])\b', entrada)
+        if numeros:
+            st.session_state.historico_quant.extend([int(n) for n in numeros])
+        st.session_state.input_texto_rapido = "" # Limpa a caixa
 
 with st.sidebar:
     st.markdown("### 🎮 Modo de Análise")
@@ -142,58 +147,63 @@ with st.sidebar:
     st.divider()
 
     st.title("⚙️ Inserir Dados")
-    aba_ocr, aba_manual = st.tabs(["📸 Print Rápido", "⌨️ Digitar"])
+    
+    aba_ocr, aba_texto = st.tabs(["📸 Colar Print", "⌨️ Digitação Rápida"])
     
     with aba_ocr:
-        st.info("**INSTRUÇÕES:**\n1. Tira o Print APENAS à barra do histórico (tenta não apanhar o chat ou a cara da crupiê).\n2. Clica na caixa abaixo e faz `Ctrl + V`.")
+        st.info("**Instruções:** Usa o `Windows + Shift + S`. Recorta apenas a grelha dos números. Clica na caixa abaixo e dá `Ctrl + V`.")
         imagem_upload = st.file_uploader("", type=["png", "jpg", "jpeg"], label_visibility="collapsed")
         
         if imagem_upload is not None:
             try:
-                # ---------------------------------------------------------
-                # FILTRO DE VISÃO COMPUTACIONAL (RAIO-X PARA CASINOS)
-                # ---------------------------------------------------------
-                imagem = Image.open(imagem_upload)
+                imagem = Image.open(imagem_upload).convert('RGB')
                 
-                # 1. Upscale brutal (3x maior) para os pixeis ficarem nítidos
-                nova_largura = imagem.width * 3
-                nova_altura = imagem.height * 3
-                imagem_redimensionada = imagem.resize((nova_largura, nova_altura), Image.Resampling.LANCZOS)
+                # --- NOVO FILTRO DE RAIO-X PARA NEON/CASSINO ---
+                # 1. Upscale brutal
+                imagem = imagem.resize((imagem.width * 3, imagem.height * 3), Image.Resampling.LANCZOS)
+                # 2. Aumentar contraste das cores antes de remover a cor
+                imagem = ImageEnhance.Contrast(imagem).enhance(3.0)
+                # 3. Tons de Cinza
+                img_gray = imagem.convert('L')
+                # 4. Binarização Extrema (Força os números brilhantes a ficarem brancos puros e o fundo preto)
+                limite = 100
+                img_bin = img_gray.point(lambda p: 255 if p > limite else 0)
+                # 5. Inverter (Tesseract adora fundo branco com letras pretas)
+                img_final = ImageOps.invert(img_bin)
                 
-                # 2. Remoção total de cor (Tons de Cinza)
-                imagem_pb = imagem_redimensionada.convert('L')
+                # MOSTRAR AO UTILIZADOR COMO A IA ESTÁ A VER O ECRÃ
+                st.image(img_final, caption="Visão Raio-X da Inteligência Artificial", use_container_width=True)
                 
-                # 3. Contraste Máximo (separar bem o fundo do texto)
-                melhorador = ImageEnhance.Contrast(imagem_pb)
-                imagem_contraste = melhorador.enhance(3.0)
-                
-                # 4. Inversão de Cores (O Tesseract adora fundo branco e letras pretas)
-                imagem_final = ImageOps.invert(imagem_contraste)
-                
-                # 5. Whitelist Absoluta (A IA está proibida de ler letras, APENAS números de 0 a 9)
-                # O PSM 6 assume que o print é um bloco uniforme de texto.
+                # Leitura focada em blocos de texto (PSM 6)
                 config_tesseract = r'--psm 6 -c tessedit_char_whitelist=0123456789'
-                texto_bruto = pytesseract.image_to_string(imagem_final, config=config_tesseract)
+                texto_bruto = pytesseract.image_to_string(img_final, config=config_tesseract)
                 
-                # Expressão Regular super estrita (Apanha números avulsos de 0 a 36)
+                # Ignora Multiplicadores gigantes (ex: 200x) porque só aceita de 0 a 36!
                 numeros_detectados = re.findall(r'\b([0-9]|[1-2][0-9]|3[0-6])\b', texto_bruto)
                 numeros_limpos = [int(n) for n in numeros_detectados]
                 
                 if numeros_limpos:
-                    st.success(f"**Sucesso! IA leu {len(numeros_limpos)} números:**")
+                    st.success(f"**Apanhei {len(numeros_limpos)} números!**")
                     st.info(f"{numeros_limpos}")
-                    if st.button("✅ Injetar no Motor Estatístico", use_container_width=True):
-                        st.session_state.historico_quant.extend(numeros_limpos)
-                        st.rerun()
-                else:
-                    st.error("A IA não detetou números válidos (0-36). O print tem muito ruído ao redor?")
                     
+                    col_b1, col_b2 = st.columns(2)
+                    with col_b1:
+                        if st.button("✅ Injetar Direto", use_container_width=True):
+                            st.session_state.historico_quant.extend(numeros_limpos)
+                            st.rerun()
+                    with col_b2:
+                        if st.button("🔄 Inverter Ordem", help="Usa isto se a grelha ler os números de trás para a frente", use_container_width=True):
+                            st.session_state.historico_quant.extend(reversed(numeros_limpos))
+                            st.rerun()
+                else:
+                    st.error("Falha na leitura. O print tem texto a mais misturado (chat, caras)?")
             except Exception as e:
-                st.error("Erro interno no motor OCR. Tenta de novo.")
+                st.error("Erro interno. Tenta fazer o recorte apenas da tabela.")
 
-    with aba_manual:
-        st.write("Se faltar algum, digita e prime **ENTER**.")
-        st.number_input("Número Sorteado (0-36):", min_value=0, max_value=36, step=1, value=None, key="input_roleta", on_change=registar_jogada)
+    with aba_texto:
+        st.write("Sem bugs. Digita 1 número e dá Enter, ou vários separados por espaço (ex: `12 5 36 0`).")
+        # Substituí o number_input bugado por um text_input fluido
+        st.text_input("Números:", key="input_texto_rapido", on_change=submeter_texto_rapido)
 
     st.divider()
     
