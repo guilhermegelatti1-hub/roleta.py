@@ -80,30 +80,19 @@ class RoletaQuantEngine:
         zona = [self.RODA[(idx_alvo + i) % 37] for i in range(-2, 3)]
         return alvo_principal, zona
 
-    # NOVO: DETETOR DE FALHA MECÂNICA (Teste Qui-Quadrado)
     def scanner_falha_mecanica(self, historico):
-        """Usa estatística inferencial para detetar se a roleta está viciada (tilt/desgaste)"""
         n = len(historico)
-        if n < 37: 
-            # Sem volume para o teste matemático real, retorna estado Neutro
-            return 0, False, []
-        
+        if n < 37: return 0, False, []
         esperado = n / 37.0
         contagem = Counter(historico)
         qui_quadrado = 0
-        
         for num in range(37):
             observado = contagem.get(num, 0)
             qui_quadrado += ((observado - esperado) ** 2) / esperado
-            
-        # Limite Crítico: 50.99 (95% Confiança com 36 graus de liberdade)
         mesa_viciada = qui_quadrado > 50.99
-        
-        # Encontra os números anómalos se a mesa estiver viciada
         anomalias = []
         if mesa_viciada:
             anomalias = [num for num, qtd in contagem.items() if qtd > esperado * 1.5]
-            
         return qui_quadrado, mesa_viciada, anomalias
 
 # ==========================================
@@ -117,7 +106,9 @@ st.markdown("""
     .radar-box { padding: 15px; border-radius: 10px; margin-bottom: 10px; color: white; text-align: center; font-weight: bold;}
     .pista-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #1f4037 0%, #99f2c8 100%); color: black; text-align: center; font-weight: bold; border: 2px solid white;}
     .alvo-box { padding: 20px; border-radius: 15px; background: linear-gradient(135deg, #FF4136 0%, #FF851B 100%); color: white; text-align: center; font-weight: bold; border: 2px solid white;}
+    .erratico-box { padding: 20px; border-radius: 15px; background-color: #333333; color: #aaaaaa; text-align: center; border: 1px dashed #777;}
     .vicio-box { padding: 25px; border-radius: 15px; background: linear-gradient(135deg, #FF0000 0%, #8B0000 100%); color: white; text-align: center; font-weight: bold; border: 3px dashed yellow; animation: blinker 2s linear infinite;}
+    .historico-scroll { max-height: 300px; overflow-y: auto; padding: 15px; background-color: #111111; border-radius: 8px; border: 1px solid #333; font-size: 16px; line-height: 1.8;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -127,7 +118,7 @@ if 'historico_quant' not in st.session_state:
 engine = RoletaQuantEngine()
 
 # ==========================================
-# 3. BARRA LATERAL (Inserção Ultra-Rápida)
+# 3. BARRA LATERAL (Entrada & Histórico)
 # ==========================================
 def registar_jogada():
     num = st.session_state.input_roleta
@@ -140,14 +131,32 @@ with st.sidebar:
     st.write("Digita o número e prime **ENTER**.")
     
     st.number_input("Número Sorteado (0-36):", min_value=0, max_value=36, step=1, value=None, key="input_roleta", on_change=registar_jogada)
+    
+    st.divider()
+    
+    st.markdown("### 📜 Histórico da Sessão")
+    historico_atual = st.session_state.historico_quant
+    
+    if len(historico_atual) > 0:
+        hist_formatado = []
+        for n in historico_atual:
+            cor = engine.classificar(n)["Cor"]
+            emoji = "🔴" if cor == "Vermelho" else "⚫" if cor == "Preto" else "🟢"
+            hist_formatado.append(f"**{n}** {emoji}")
             
-    st.write("---")
-    if st.button("🚨 Nova Sessão", type="primary", use_container_width=True):
+        texto_historico = " ➔ ".join(hist_formatado)
+        st.markdown(f"<div class='historico-scroll'>{texto_historico}</div>", unsafe_allow_html=True)
+        st.caption(f"Total digitado: {len(historico_atual)} jogadas")
+    else:
+        st.info("Nenhum número registado. Comece a digitar acima.")
+        
+    st.divider()
+    if st.button("🚨 Limpar Sessão", type="primary", use_container_width=True):
         st.session_state.historico_quant = []
         st.rerun()
 
 # ==========================================
-# 4. DASHBOARD VISUAL E ADAPTAÇÃO A FALHAS
+# 4. DASHBOARD VISUAL
 # ==========================================
 historico = st.session_state.historico_quant
 n_jogadas = len(historico)
@@ -160,13 +169,11 @@ if n_jogadas < LIMITE_CALIBRACAO:
     st.markdown(f"### Calibrando: {n_jogadas} / {LIMITE_CALIBRACAO} jogadas")
     progresso = int((n_jogadas / LIMITE_CALIBRACAO) * 100)
     st.progress(progresso, text=f"{progresso}% concluído")
-    
-    if n_jogadas > 0: st.write(f"**Histórico:** {historico}")
 else:
     st.success(f"✅ Mesa Calibrada. {n_jogadas} jogadas em análise contínua.")
     
     # ---------------------------------------------------------
-    # ADAPTAÇÃO SUPREMA: SCANNER DE FALHA MECÂNICA (VÍCIO)
+    # SCANNER DE FALHA MECÂNICA (VÍCIO)
     # ---------------------------------------------------------
     qui_quadrado, mesa_viciada, anomalias = engine.scanner_falha_mecanica(historico)
     
@@ -179,30 +186,39 @@ else:
             APOSTE EXCLUSIVAMENTE NOS NÚMEROS COM DEFEITO: {anomalias}
         </div>
         """, unsafe_allow_html=True)
-        st.write("") # Espaçamento
+        st.write("") 
     else:
-        st.info(f"Integridade da Mesa: Nível Saudável (Qui-Quadrado: {qui_quadrado:.1f}/50.99). A roleta está a comportar-se aleatoriamente.")
+        st.info(f"Integridade da Mesa: Nível Saudável (Qui-Quadrado: {qui_quadrado:.1f}/50.99).")
 
     # ---------------------------------------------------------
-    # DETETOR DE ASSINATURA DO CROUPIER (Predição Física)
+    # DETETOR DE ASSINATURA DO CROUPIER (Com Filtro de Ruído)
     # ---------------------------------------------------------
     st.markdown("### 🕵️‍♂️ Assinatura do Croupier (Memória Muscular)")
     
     saltos = engine.calcular_saltos(historico)
-    contagem_saltos = Counter(saltos)
-    
-    if contagem_saltos:
+    if saltos:
+        contagem_saltos = Counter(saltos)
         salto_mais_comum = contagem_saltos.most_common(1)[0]
         distancia_padrao = salto_mais_comum[0]
-        percentagem_salto = (salto_mais_comum[1] / len(saltos)) * 100
         
-        alvo, zona = engine.projetar_alvo(historico[-1], distancia_padrao)
+        # MUDANÇA AQUI: Calcular se a "Zona de Queda" (+/- 2 casas) tem aderência suficiente
+        saltos_na_zona = sum(1 for s in saltos if min(abs(s - distancia_padrao), 37 - abs(s - distancia_padrao)) <= 2)
+        confianca_zona = (saltos_na_zona / len(saltos)) * 100
         
         col_f1, col_f2 = st.columns([1, 2])
-        with col_f1:
-            st.metric("Distância Padrão de Lançamento", f"+{distancia_padrao} casas", f"{percentagem_salto:.1f}% de consistência")
-        with col_f2:
-            st.markdown(f"<div class='alvo-box'>🎯 ALVO FÍSICO PROJETADO: NÚMERO {alvo}<br>Cobrir a zona de queda: {zona}</div>", unsafe_allow_html=True)
+        
+        # Se menos de 25% dos saltos caírem na mesma zona da roda, o crupiê é imprevisível
+        if confianca_zona < 25.0:
+            with col_f1:
+                st.metric("Distância Padrão", "Falhou", "Dispersão Elevada")
+            with col_f2:
+                st.markdown("<div class='erratico-box'>❌ CRUPIÊ ERRÁTICO ❌<br>A força de lançamento varia demasiado (sem padrão físico seguro). Aguarde ou mude de mesa.</div>", unsafe_allow_html=True)
+        else:
+            alvo, zona = engine.projetar_alvo(historico[-1], distancia_padrao)
+            with col_f1:
+                st.metric("Distância Padrão de Lançamento", f"+{distancia_padrao} casas", f"Zona atinge {confianca_zona:.1f}% de precisão")
+            with col_f2:
+                st.markdown(f"<div class='alvo-box'>🎯 ALVO FÍSICO PROJETADO: NÚMERO {alvo}<br>Cobrir a zona de queda: {zona}</div>", unsafe_allow_html=True)
 
     st.divider()
 
