@@ -9,11 +9,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from roulette_engine import (
-    EuropeanRouletteEngine,
-    SignalResult,
-)
+from roulette_engine import EuropeanRouletteEngine, SignalResult
 
+
+# ==========================================================
+# CONFIGURAÇÃO DA PÁGINA
+# ==========================================================
 
 st.set_page_config(
     page_title="Roulette Lens",
@@ -22,14 +23,23 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
+# ==========================================================
+# INICIALIZAÇÃO
+# ==========================================================
+
 engine = EuropeanRouletteEngine()
 
 if "history" not in st.session_state:
     st.session_state.history = []
 
 
+# ==========================================================
+# FUNÇÕES AUXILIARES
+# ==========================================================
+
 def add_number(number: int) -> None:
-    """Adiciona um resultado ao histórico."""
+    """Adiciona um resultado validado ao histórico."""
 
     validated_number = engine.validate_number(number)
 
@@ -63,7 +73,7 @@ def submit_text_input() -> None:
 
 
 def number_badge(number: int) -> str:
-    """Cria a bolinha visual de um número."""
+    """Cria a representação visual de um número."""
 
     color_class = {
         "Vermelho": "ball-red",
@@ -96,11 +106,13 @@ def render_signal_card(
     st.markdown(
         f"""
         <section class="signal-card">
+
             <div class="eyebrow">
                 LEITURA ESTATÍSTICA
             </div>
 
             <div class="signal-header">
+
                 <div>
                     <h2>
                         {escape(signal.target_sector)}
@@ -118,6 +130,7 @@ def render_signal_card(
                     Score interno
                     {escape(signal.confidence_label.lower())}
                 </span>
+
             </div>
 
             <div class="ball-row">
@@ -125,6 +138,7 @@ def render_signal_card(
             </div>
 
             <div class="signal-grid">
+
                 <div>
                     <span>Concentração</span>
                     <strong>
@@ -148,20 +162,27 @@ def render_signal_card(
                         {signal.sample_size}
                     </strong>
                 </div>
+
             </div>
 
             <p class="signal-note">
                 {escape(signal.explanation)}
             </p>
+
         </section>
         """,
         unsafe_allow_html=True,
     )
 
 
+# ==========================================================
+# ESTILOS
+# ==========================================================
+
 st.markdown(
     """
     <style>
+
     :root {
         --background: #07111f;
         --surface: rgba(15, 28, 46, 0.90);
@@ -210,9 +231,14 @@ st.markdown(
 
     [data-testid="stMetric"] {
         padding: 16px 18px;
-        border: 1px solid var(--border);
+
+        border:
+            1px solid var(--border);
+
         border-radius: 18px;
-        background: var(--surface);
+
+        background:
+            var(--surface);
 
         box-shadow:
             0 14px 34px
@@ -222,7 +248,10 @@ st.markdown(
     .hero {
         margin-bottom: 22px;
         padding: 28px 30px;
-        border: 1px solid var(--border);
+
+        border:
+            1px solid var(--border);
+
         border-radius: 24px;
 
         background:
@@ -244,13 +273,14 @@ st.markdown(
         font-size:
             clamp(2.1rem, 4vw, 3.7rem);
 
-        letter-spacing: -0.05em;
+        letter-spacing:
+            -0.05em;
     }
 
-    .hero p,
-    .signal-note,
-    .signal-header p {
+    .hero p {
+        max-width: 780px;
         color: var(--muted);
+        font-size: 1.05rem;
     }
 
     .eyebrow {
@@ -294,6 +324,11 @@ st.markdown(
     .signal-header h2 {
         margin: 0;
         font-size: 2rem;
+    }
+
+    .signal-header p,
+    .signal-note {
+        color: var(--muted);
     }
 
     .score-pill {
@@ -401,7 +436,10 @@ st.markdown(
 
     .signal-grid div {
         padding: 14px;
-        border: 1px solid var(--border);
+
+        border:
+            1px solid var(--border);
+
         border-radius: 16px;
 
         background:
@@ -424,7 +462,10 @@ st.markdown(
         overflow-y: auto;
 
         padding: 14px;
-        border: 1px solid var(--border);
+
+        border:
+            1px solid var(--border);
+
         border-radius: 16px;
 
         background:
@@ -469,6 +510,7 @@ st.markdown(
     }
 
     @media (max-width: 760px) {
+
         .signal-grid {
             grid-template-columns: 1fr;
         }
@@ -476,14 +518,21 @@ st.markdown(
         .signal-header {
             flex-direction: column;
         }
+
     }
+
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 
+# ==========================================================
+# BARRA LATERAL
+# ==========================================================
+
 with st.sidebar:
+
     st.markdown("## 🎯 Roulette Lens")
 
     st.caption(
@@ -529,7 +578,12 @@ with st.sidebar:
         ["Mesa", "Texto"]
     )
 
+    # ------------------------------------------------------
+    # TECLADO NUMÉRICO
+    # ------------------------------------------------------
+
     with keyboard_tab:
+
         if st.button(
             "0 🟢",
             use_container_width=True,
@@ -539,12 +593,14 @@ with st.sidebar:
             st.rerun()
 
         for row in range(12):
+
             columns = st.columns(3)
 
             for offset, column in enumerate(
                 columns,
                 start=1,
             ):
+
                 number = row * 3 + offset
 
                 if (
@@ -556,6 +612,7 @@ with st.sidebar:
                     icon = "⚫"
 
                 with column:
+
                     if st.button(
                         f"{number} {icon}",
                         use_container_width=True,
@@ -564,7 +621,12 @@ with st.sidebar:
                         add_number(number)
                         st.rerun()
 
+    # ------------------------------------------------------
+    # ENTRADA POR TEXTO
+    # ------------------------------------------------------
+
     with text_tab:
+
         st.text_input(
             "Cole uma sequência",
             key="quick_input",
@@ -584,6 +646,7 @@ with st.sidebar:
     st.markdown("### Histórico")
 
     if st.session_state.history:
+
         recent_badges = " ".join(
             number_badge(number)
             for number
@@ -609,6 +672,7 @@ with st.sidebar:
         )
 
         with undo_column:
+
             if st.button(
                 "↩ Desfazer",
                 use_container_width=True,
@@ -617,6 +681,7 @@ with st.sidebar:
                 st.rerun()
 
         with clear_column:
+
             if st.button(
                 "Limpar",
                 type="primary",
@@ -626,14 +691,20 @@ with st.sidebar:
                 st.rerun()
 
     else:
+
         st.info(
             "Adicione resultados para iniciar."
         )
 
 
+# ==========================================================
+# CABEÇALHO
+# ==========================================================
+
 st.markdown(
     """
     <section class="hero">
+
         <div class="eyebrow">
             EUROPEAN ROULETTE ANALYTICS
         </div>
@@ -646,15 +717,22 @@ st.markdown(
             recência e desempenho histórico
             da regra estatística.
         </p>
+
     </section>
     """,
     unsafe_allow_html=True,
 )
 
+
+# ==========================================================
+# PROCESSAMENTO
+# ==========================================================
+
 history = st.session_state.history
 total_spins = len(history)
 
 if total_spins == 0:
+
     st.info(
         "Comece adicionando os resultados "
         "no painel lateral."
@@ -662,7 +740,9 @@ if total_spins == 0:
 
     st.stop()
 
+
 current_window = history[-analysis_window:]
+
 
 signal = engine.build_signal(
     current_window,
@@ -670,62 +750,86 @@ signal = engine.build_signal(
     neighbor_radius=neighbor_radius,
 )
 
+
 red_count = sum(
     engine.get_color(number) == "Vermelho"
     for number in current_window
 )
+
 
 black_count = sum(
     engine.get_color(number) == "Preto"
     for number in current_window
 )
 
+
 zero_count = current_window.count(0)
 
+
+# ==========================================================
+# MÉTRICAS PRINCIPAIS
+# ==========================================================
+
 metric_columns = st.columns(4)
+
 
 metric_columns[0].metric(
     "Resultados",
     total_spins,
 )
 
+
 metric_columns[1].metric(
     "Janela ativa",
     len(current_window),
 )
+
 
 metric_columns[2].metric(
     "Vermelho / Preto",
     f"{red_count} / {black_count}",
 )
 
+
 metric_columns[3].metric(
     "Zeros",
     zero_count,
 )
+
 
 st.markdown(
     "<br>",
     unsafe_allow_html=True,
 )
 
+
+# ==========================================================
+# CARTÃO E DISTRIBUIÇÃO POR SETOR
+# ==========================================================
+
 left_column, right_column = st.columns(
     [1.16, 0.84],
     gap="large",
 )
 
+
 with left_column:
+
     if signal:
+
         render_signal_card(signal)
 
     else:
+
         st.warning(
             "São necessários pelo menos "
             "8 resultados válidos para gerar "
             "uma leitura."
         )
 
+
 with right_column:
+
     sector_counts = Counter(
         engine.get_sector(number)
         for number in current_window
@@ -781,10 +885,16 @@ with right_column:
         use_container_width=True,
     )
 
+
 st.markdown(
     "<br>",
     unsafe_allow_html=True,
 )
+
+
+# ==========================================================
+# ABAS
+# ==========================================================
 
 (
     overview_tab,
@@ -798,7 +908,13 @@ st.markdown(
     ]
 )
 
+
+# ==========================================================
+# ABA: VISÃO GERAL
+# ==========================================================
+
 with overview_tab:
+
     timeline = pd.DataFrame(
         {
             "Jogada": range(
@@ -859,7 +975,13 @@ with overview_tab:
         use_container_width=True,
     )
 
+
+# ==========================================================
+# ABA: NÚMEROS
+# ==========================================================
+
 with numbers_tab:
+
     frequency = Counter(current_window)
 
     number_table = pd.DataFrame(
@@ -889,6 +1011,15 @@ with numbers_tab:
         ],
     )
 
+    maximum_occurrences = max(
+        1,
+        int(
+            number_table[
+                "Ocorrências"
+            ].max()
+        ),
+    )
+
     st.dataframe(
         number_table,
         use_container_width=True,
@@ -902,34 +1033,39 @@ with numbers_tab:
             "Ocorrências": (
                 st.column_config.ProgressColumn(
                     min_value=0,
-                    max_value=max(
-                        1,
-                        number_table[
-                            "Ocorrências"
-                        ].max(),
-                    ),
+                    max_value=maximum_occurrences,
                 )
             ),
         },
     )
 
+
+# ==========================================================
+# ABA: AUDITORIA
+# ==========================================================
+
 with audit_tab:
+
     if signal:
+
         theoretical_coverage = (
             len(signal.covered_numbers)
             / 37
             * 100
         )
 
+        observed_difference = (
+            signal.backtest_accuracy
+            - theoretical_coverage
+        )
+
         audit_columns = st.columns(3)
 
         audit_columns[0].metric(
             "Taxa do backtest",
-            (
-                f"{signal.backtest_accuracy:.1f}%"
-            ),
+            f"{signal.backtest_accuracy:.1f}%",
             help=(
-                "Calculada sobre "
+                f"Calculada sobre "
                 f"{signal.backtest_trials} "
                 "previsões walk-forward."
             ),
@@ -942,11 +1078,7 @@ with audit_tab:
 
         audit_columns[2].metric(
             "Diferença observada",
-            (
-                f"{signal.backtest_accuracy "
-                f"- theoretical_coverage:+.1f} "
-                "p.p."
-            ),
+            f"{observed_difference:+.1f} p.p.",
         )
 
         st.write(
@@ -972,19 +1104,28 @@ with audit_tab:
         )
 
     else:
+
         st.info(
             "Adicione mais resultados para "
             "liberar a auditoria."
         )
 
+
+# ==========================================================
+# AVISO FINAL
+# ==========================================================
+
 st.markdown(
     """
     <div class="disclaimer">
+
         <strong>Importante:</strong>
+
         resultados de roleta são independentes
         e aleatórios. Este painel descreve o
         histórico e não garante vantagem, lucro
         ou previsão do próximo giro.
+
     </div>
     """,
     unsafe_allow_html=True,
