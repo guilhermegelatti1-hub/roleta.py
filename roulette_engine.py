@@ -1210,906 +1210,208 @@ A validação local confirmou a sintaxe e os 14 testes. Não consegui iniciar a 
 
 Biblioteca
 /
-roulette_engine.py
-from __future__ import annotations
+test_engine.py
+import unittest
 
-from dataclasses import dataclass
-from math import sqrt
-from typing import Iterable, Sequence
+from roulette_engine import EuropeanRouletteEngine
 
 
-@dataclass(frozen=True)
-class BacktestResult:
-    hits: int
-    trials: int
-    accuracy_pct: float
-    baseline_pct: float
-    lift_pct_points: float
-    wilson_low_pct: float
-    wilson_high_pct: float
+class EuropeanRouletteEngineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.engine = EuropeanRouletteEngine()
 
+    def test_wheel_contains_all_numbers_once(self) -> None:
+        self.assertEqual(len(self.engine.WHEEL), 37)
+        self.assertEqual(set(self.engine.WHEEL), set(range(37)))
 
-@dataclass(frozen=True)
-class SignalResult:
-    target_sector: str
-    epicenter: int
-    covered_numbers: tuple[int, ...]
-    sector_share_pct: float
-    sector_expected_pct: float
-    sector_z_score: float
-    evidence_score: float
-    evidence_label: str
-    backtest: BacktestResult
-    sample_size: int
-    effective_sample_size: float
-    explanation: str
-
-
-class EuropeanRouletteEngine:
-    """Motor descritivo para resultados de roleta europeia.
-
-    A classe resume concentração por recência, posição física na roda e
-    desempenho walk-forward de uma regra determinística. Ela não afirma que
-    giros independentes possam ser previstos.
-    """
-
-    MINIMUM_SAMPLE = 12
-
-    WHEEL: tuple[int, ...] = (
-        0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23,
-        10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26,
-    )
-
-    RED_NUMBERS = frozenset(
-        {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
-    )
-
-    # Partição exclusiva da roda. "Voisins lateral" representa a parte de
-    # Voisins du Zéro que não está contida em Jeu Zéro.
-    SECTORS: dict[str, tuple[int, ...]] = {
-        "Jeu Zéro": (12, 35, 3, 26, 0, 32, 15),
-        "Voisins lateral": (22, 18, 29, 7, 28, 19, 4, 21, 2, 25),
-        "Orphelins": (1, 20, 14, 31, 9, 6, 34, 17),
-        "Tiers": (27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33),
-    }
-
-    def __init__(self) -> None:
-        self._wheel_index = {number: index for index, number in enumerate(self.WHEEL)}
-        self._sector_by_number = {
-            number: sector
-            for sector, numbers in self.SECTORS.items()
-            for number in numbers
-        }
-        self._validate_configuration()
-
-    def _validate_configuration(self) -> None:
-        wheel_numbers = set(self.WHEEL)
-        sector_numbers = [
+    def test_sectors_form_exclusive_partition(self) -> None:
+        numbers = [
             number
-            for numbers in self.SECTORS.values()
-            for number in numbers
+            for sector_numbers in self.engine.SECTORS.values()
+            for number in sector_numbers
         ]
+        self.assertEqual(len(numbers), 37)
+        self.assertEqual(set(numbers), set(range(37)))
 
-        if len(self.WHEEL) != 37 or wheel_numbers != set(range(37)):
-            raise RuntimeError("A configuração da roda deve conter 0–36 exatamente uma vez.")
+    def test_colors(self) -> None:
+        self.assertEqual(self.engine.get_color(0), "Verde")
+        self.assertEqual(self.engine.get_color(1), "Vermelho")
+        self.assertEqual(self.engine.get_color(2), "Preto")
 
-        if len(sector_numbers) != 37 or set(sector_numbers) != wheel_numbers:
-            raise RuntimeError("Os setores devem formar uma partição exclusiva da roda.")
+    def test_invalid_number(self) -> None:
+        with self.assertRaises(ValueError):
+            self.engine.validate_number(37)
 
-    @staticmethod
-    def validate_number(number: int) -> int:
-        if isinstance(number, bool):
-            raise ValueError("Valores booleanos não são resultados válidos.")
+        with self.assertRaises(ValueError):
+            self.engine.validate_number(True)
 
-        try:
-            value = int(number)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Resultado inválido: {number!r}.") from exc
+        with self.assertRaises(ValueError):
+            self.engine.validate_number(1.5)
 
-        if value != number and not isinstance(number, str):
-            raise ValueError(f"Resultado inválido: {number!r}.")
+    def test_sanitize_history(self) -> None:
+        clean = self.engine.sanitize_history([0, "1", 37, None, 2])
+        self.assertEqual(clean, [0, 1, 2])
 
-        if not 0 <= value <= 36:
-            raise ValueError(f"Número inválido: {value}. Use valores de 0 a 36.")
-
-        return value
-
-    def sanitize_history(self, history: Iterable[int]) -> list[int]:
-        clean: list[int] = []
-
-        for number in history:
-            try:
-                clean.append(self.validate_number(number))
-            except ValueError:
-                continue
-
-        return clean
-
-    def get_color(self, number: int) -> str:
-        value = self.validate_number(number)
-
-        if value == 0:
-            return "Verde"
-
-        return "Vermelho" if value in self.RED_NUMBERS else "Preto"
-
-    def get_sector(self, number: int) -> str:
-        return self._sector_by_number[self.validate_number(number)]
-
-    def get_neighbors(self, number: int, radius: int = 2) -> tuple[int, ...]:
-        value = self.validate_number(number)
-        bounded_radius = max(0, min(int(radius), 18))
-        index = self._wheel_index[value]
-
-        return tuple(
-            self.WHEEL[(index + offset) % len(self.WHEEL)]
-            for offset in range(-bounded_radius, bounded_radius + 1)
+    def test_neighbors_wrap_around(self) -> None:
+        self.assertEqual(
+            self.engine.get_neighbors(0, 2),
+            (3, 26, 0, 32, 15),
         )
 
-    @staticmethod
-    def recency_weights(length: int, decay: float) -> tuple[float, ...]:
-        if length <= 0:
-            return ()
+    def test_radius_is_bounded(self) -> None:
+        self.assertEqual(len(self.engine.get_neighbors(0, 100)), 37)
 
-        bounded_decay = min(max(float(decay), 0.50), 0.999)
-
-        return tuple(
-            bounded_decay ** (length - 1 - index)
-            for index in range(length)
+    def test_effective_sample_size(self) -> None:
+        self.assertAlmostEqual(
+            self.engine.effective_sample_size([1, 1, 1, 1]),
+            4.0,
         )
 
-    @staticmethod
-    def effective_sample_size(weights: Sequence[float]) -> float:
-        total = sum(weights)
-        squared_total = sum(weight * weight for weight in weights)
+    def test_uniform_wheel_has_no_sector_size_bias(self) -> None:
+        statistics = self.engine.sector_statistics(list(self.engine.WHEEL), decay=0.999)
 
-        if squared_total == 0:
-            return 0.0
-
-        return total * total / squared_total
-
-    def sector_statistics(
-        self,
-        history: Sequence[int],
-        decay: float = 0.90,
-    ) -> dict[str, dict[str, float]]:
-        clean = self.sanitize_history(history)
-        weights = self.recency_weights(len(clean), decay)
-        total_weight = sum(weights)
-        effective_n = self.effective_sample_size(weights)
-
-        statistics: dict[str, dict[str, float]] = {}
-
-        for sector, numbers in self.SECTORS.items():
-            sector_set = set(numbers)
-            observed_weight = sum(
-                weight
-                for number, weight in zip(clean, weights)
-                if number in sector_set
+        for values in statistics.values():
+            self.assertAlmostEqual(
+                values["observed_share_pct"],
+                values["expected_share_pct"],
+                delta=0.2,
             )
 
-            observed_share = observed_weight / total_weight if total_weight else 0.0
-            expected_share = len(numbers) / 37
-
-            if effective_n > 0:
-                standard_error = sqrt(
-                    expected_share * (1 - expected_share) / effective_n
-                )
-            else:
-                standard_error = 0.0
-
-            z_score = (
-                (observed_share - expected_share) / standard_error
-                if standard_error > 0
-                else 0.0
+    def test_signal_requires_minimum_sample(self) -> None:
+        self.assertIsNone(
+            self.engine.build_signal(
+                list(range(self.engine.MINIMUM_SAMPLE - 1))
             )
-
-            statistics[sector] = {
-                "observed_share_pct": observed_share * 100,
-                "expected_share_pct": expected_share * 100,
-                "z_score": z_score,
-                "effective_sample_size": effective_n,
-            }
-
-        return statistics
-
-    def _choose_target_sector(
-        self,
-        history: Sequence[int],
-        decay: float,
-    ) -> tuple[str, dict[str, dict[str, float]]]:
-        statistics = self.sector_statistics(history, decay)
-        sector_order = tuple(self.SECTORS)
-
-        target = max(
-            sector_order,
-            key=lambda sector: (
-                statistics[sector]["z_score"],
-                statistics[sector]["observed_share_pct"]
-                - statistics[sector]["expected_share_pct"],
-                -sector_order.index(sector),
-            ),
         )
 
-        return target, statistics
-
-    def _choose_epicenter(
-        self,
-        history: Sequence[int],
-        target_sector: str,
-        decay: float,
-        neighbor_radius: int,
-    ) -> int:
-        weights = self.recency_weights(len(history), decay)
-        candidate_numbers = self.SECTORS[target_sector]
-
-        best_number = candidate_numbers[0]
-        best_cluster_score = float("-inf")
-        best_center_score = float("-inf")
-        recent_positions = {
-            number: index
-            for index, number in enumerate(history)
-        }
-
-        for candidate in candidate_numbers:
-            covered = set(self.get_neighbors(candidate, neighbor_radius))
-            cluster_score = sum(
-                weight
-                for number, weight in zip(history, weights)
-                if number in covered
-            )
-            center_score = sum(
-                weight
-                for number, weight in zip(history, weights)
-                if number == candidate
-            )
-
-            tie_break = recent_positions.get(candidate, -1)
-            current_key = (cluster_score, center_score, tie_break)
-            best_key = (
-                best_cluster_score,
-                best_center_score,
-                recent_positions.get(best_number, -1),
-            )
-
-            if current_key > best_key:
-                best_number = candidate
-                best_cluster_score = cluster_score
-                best_center_score = center_score
-
-        return best_number
-
-    def _raw_signal(
-        self,
-        history: Sequence[int],
-        decay: float,
-        neighbor_radius: int,
-    ) -> tuple[str, int, tuple[int, ...], dict[str, float]]:
-        target_sector, statistics = self._choose_target_sector(history, decay)
-        epicenter = self._choose_epicenter(
-            history,
-            target_sector,
-            decay,
-            neighbor_radius,
-        )
-        covered_numbers = self.get_neighbors(epicenter, neighbor_radius)
-
-        return (
-            target_sector,
-            epicenter,
-            covered_numbers,
-            statistics[target_sector],
+    def test_signal_is_deterministic(self) -> None:
+        history = [
+            0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27,
+            13, 36, 11, 30, 8, 23, 10, 5,
+        ]
+        self.assertEqual(
+            self.engine.build_signal(history),
+            self.engine.build_signal(history),
         )
 
-    @staticmethod
-    def wilson_interval(
-        hits: int,
-        trials: int,
-        z_value: float = 1.96,
-    ) -> tuple[float, float]:
-        if trials <= 0:
-            return 0.0, 100.0
+    def test_backtest_trials(self) -> None:
+        history = list(range(20))
+        result = self.engine.backtest(history)
+        self.assertEqual(result.trials, 8)
 
-        proportion = hits / trials
-        denominator = 1 + z_value * z_value / trials
-        center = (
-            proportion
-            + z_value * z_value / (2 * trials)
-        ) / denominator
-        margin = (
-            z_value
-            * sqrt(
-                proportion * (1 - proportion) / trials
-                + z_value * z_value / (4 * trials * trials)
-            )
-            / denominator
-        )
+    def test_backtest_baseline_matches_coverage(self) -> None:
+        result = self.engine.backtest(list(range(20)), neighbor_radius=2)
+        self.assertAlmostEqual(result.baseline_pct, 5 / 37 * 100)
 
-        return (
-            max(0.0, center - margin) * 100,
-            min(1.0, center + margin) * 100,
-        )
+    def test_wilson_interval_contains_observed_rate(self) -> None:
+        low, high = self.engine.wilson_interval(5, 10)
+        self.assertLessEqual(low, 50)
+        self.assertGreaterEqual(high, 50)
 
-    def backtest(
-        self,
-        history: Sequence[int],
-        decay: float = 0.90,
-        neighbor_radius: int = 2,
-        minimum_training: int | None = None,
-    ) -> BacktestResult:
-        clean = self.sanitize_history(history)
-        training_size = minimum_training or self.MINIMUM_SAMPLE
-        hits = 0
-        trials = 0
 
-        for next_index in range(training_size, len(clean)):
-            training = clean[:next_index]
-            _, _, covered_numbers, _ = self._raw_signal(
-                training,
-                decay,
-                neighbor_radius,
-            )
-
-            hits += int(clean[next_index] in covered_numbers)
-            trials += 1
-
-        coverage_size = len(self.get_neighbors(0, neighbor_radius))
-        baseline_pct = coverage_size / 37 * 100
-        accuracy_pct = hits / trials * 100 if trials else 0.0
-        low_pct, high_pct = self.wilson_interval(hits, trials)
-
-        return BacktestResult(
-            hits=hits,
-            trials=trials,
-            accuracy_pct=accuracy_pct,
-            baseline_pct=baseline_pct,
-            lift_pct_points=accuracy_pct - baseline_pct,
-            wilson_low_pct=low_pct,
-            wilson_high_pct=high_pct,
-        )
-
-    @staticmethod
-    def _evidence_score(
-        sample_size: int,
-        effective_sample_size: float,
-        sector_z_score: float,
-        backtest: BacktestResult,
-    ) -> tuple[float, str]:
-        sample_component = min(effective_sample_size / 45, 1.0) * 30
-        sector_component = min(max(sector_z_score, 0.0) / 3.0, 1.0) * 30
-
-        conservative_lift = max(
-            backtest.wilson_low_pct - backtest.baseline_pct,
-            0.0,
-        )
-        backtest_component = min(conservative_lift / 12, 1.0) * 40
-
-        # Sem tentativas walk-forward, o score é mantido necessariamente baixo.
-        if backtest.trials == 0:
-            backtest_component = 0.0
-            sample_component = min(sample_component, 15.0)
-
-        score = min(
-            sample_component + sector_component + backtest_component,
-            100.0,
-        )
-
-        if score >= 70:
-            label = "Forte"
-        elif score >= 45:
-            label = "Moderada"
-        else:
-            label = "Fraca"
-
-        return score, label
-
-    def build_signal(
-        self,
-        history: Sequence[int],
-        decay: float = 0.90,
-        neighbor_radius: int = 2,
-    ) -> SignalResult | None:
-        clean = self.sanitize_history(history)
-
-        if len(clean) < self.MINIMUM_SAMPLE:
-            return None
-
-        (
-            target_sector,
-            epicenter,
-            covered_numbers,
-            target_statistics,
-        ) = self._raw_signal(
-            clean,
-            decay,
-            neighbor_radius,
-        )
-
-        backtest = self.backtest(
-            clean,
-            decay,
-            neighbor_radius,
-        )
-
-        evidence_score, evidence_label = self._evidence_score(
-            sample_size=len(clean),
-            effective_sample_size=target_statistics["effective_sample_size"],
-            sector_z_score=target_statistics["z_score"],
-            backtest=backtest,
-        )
-
-        explanation = (
-            f"{target_sector} representa "
-            f"{target_statistics['observed_share_pct']:.1f}% do peso recente, "
-            f"contra {target_statistics['expected_share_pct']:.1f}% pela dimensão "
-            f"do setor. O epicentro {epicenter} maximiza a concentração ponderada "
-            "na vizinhança física configurada."
-        )
-
-        return SignalResult(
-            target_sector=target_sector,
-            epicenter=epicenter,
-            covered_numbers=covered_numbers,
-            sector_share_pct=target_statistics["observed_share_pct"],
-            sector_expected_pct=target_statistics["expected_share_pct"],
-            sector_z_score=target_statistics["z_score"],
-            evidence_score=evidence_score,
-            evidence_label=evidence_label,
-            backtest=backtest,
-            sample_size=len(clean),
-            effective_sample_size=target_statistics["effective_sample_size"],
-            explanation=explanation,
-        )
+if __name__ == "__main__":
+    unittest.main()
 
 Biblioteca
 /
-roulette_engine.py
-from __future__ import annotations
+test_engine.py
+import unittest
 
-from dataclasses import dataclass
-from math import sqrt
-from typing import Iterable, Sequence
+from roulette_engine import EuropeanRouletteEngine
 
 
-@dataclass(frozen=True)
-class BacktestResult:
-    hits: int
-    trials: int
-    accuracy_pct: float
-    baseline_pct: float
-    lift_pct_points: float
-    wilson_low_pct: float
-    wilson_high_pct: float
+class EuropeanRouletteEngineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.engine = EuropeanRouletteEngine()
 
+    def test_wheel_contains_all_numbers_once(self) -> None:
+        self.assertEqual(len(self.engine.WHEEL), 37)
+        self.assertEqual(set(self.engine.WHEEL), set(range(37)))
 
-@dataclass(frozen=True)
-class SignalResult:
-    target_sector: str
-    epicenter: int
-    covered_numbers: tuple[int, ...]
-    sector_share_pct: float
-    sector_expected_pct: float
-    sector_z_score: float
-    evidence_score: float
-    evidence_label: str
-    backtest: BacktestResult
-    sample_size: int
-    effective_sample_size: float
-    explanation: str
-
-
-class EuropeanRouletteEngine:
-    """Motor descritivo para resultados de roleta europeia.
-
-    A classe resume concentração por recência, posição física na roda e
-    desempenho walk-forward de uma regra determinística. Ela não afirma que
-    giros independentes possam ser previstos.
-    """
-
-    MINIMUM_SAMPLE = 12
-
-    WHEEL: tuple[int, ...] = (
-        0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23,
-        10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26,
-    )
-
-    RED_NUMBERS = frozenset(
-        {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
-    )
-
-    # Partição exclusiva da roda. "Voisins lateral" representa a parte de
-    # Voisins du Zéro que não está contida em Jeu Zéro.
-    SECTORS: dict[str, tuple[int, ...]] = {
-        "Jeu Zéro": (12, 35, 3, 26, 0, 32, 15),
-        "Voisins lateral": (22, 18, 29, 7, 28, 19, 4, 21, 2, 25),
-        "Orphelins": (1, 20, 14, 31, 9, 6, 34, 17),
-        "Tiers": (27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33),
-    }
-
-    def __init__(self) -> None:
-        self._wheel_index = {number: index for index, number in enumerate(self.WHEEL)}
-        self._sector_by_number = {
-            number: sector
-            for sector, numbers in self.SECTORS.items()
-            for number in numbers
-        }
-        self._validate_configuration()
-
-    def _validate_configuration(self) -> None:
-        wheel_numbers = set(self.WHEEL)
-        sector_numbers = [
+    def test_sectors_form_exclusive_partition(self) -> None:
+        numbers = [
             number
-            for numbers in self.SECTORS.values()
-            for number in numbers
+            for sector_numbers in self.engine.SECTORS.values()
+            for number in sector_numbers
         ]
+        self.assertEqual(len(numbers), 37)
+        self.assertEqual(set(numbers), set(range(37)))
 
-        if len(self.WHEEL) != 37 or wheel_numbers != set(range(37)):
-            raise RuntimeError("A configuração da roda deve conter 0–36 exatamente uma vez.")
+    def test_colors(self) -> None:
+        self.assertEqual(self.engine.get_color(0), "Verde")
+        self.assertEqual(self.engine.get_color(1), "Vermelho")
+        self.assertEqual(self.engine.get_color(2), "Preto")
 
-        if len(sector_numbers) != 37 or set(sector_numbers) != wheel_numbers:
-            raise RuntimeError("Os setores devem formar uma partição exclusiva da roda.")
+    def test_invalid_number(self) -> None:
+        with self.assertRaises(ValueError):
+            self.engine.validate_number(37)
 
-    @staticmethod
-    def validate_number(number: int) -> int:
-        if isinstance(number, bool):
-            raise ValueError("Valores booleanos não são resultados válidos.")
+        with self.assertRaises(ValueError):
+            self.engine.validate_number(True)
 
-        try:
-            value = int(number)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Resultado inválido: {number!r}.") from exc
+        with self.assertRaises(ValueError):
+            self.engine.validate_number(1.5)
 
-        if value != number and not isinstance(number, str):
-            raise ValueError(f"Resultado inválido: {number!r}.")
+    def test_sanitize_history(self) -> None:
+        clean = self.engine.sanitize_history([0, "1", 37, None, 2])
+        self.assertEqual(clean, [0, 1, 2])
 
-        if not 0 <= value <= 36:
-            raise ValueError(f"Número inválido: {value}. Use valores de 0 a 36.")
-
-        return value
-
-    def sanitize_history(self, history: Iterable[int]) -> list[int]:
-        clean: list[int] = []
-
-        for number in history:
-            try:
-                clean.append(self.validate_number(number))
-            except ValueError:
-                continue
-
-        return clean
-
-    def get_color(self, number: int) -> str:
-        value = self.validate_number(number)
-
-        if value == 0:
-            return "Verde"
-
-        return "Vermelho" if value in self.RED_NUMBERS else "Preto"
-
-    def get_sector(self, number: int) -> str:
-        return self._sector_by_number[self.validate_number(number)]
-
-    def get_neighbors(self, number: int, radius: int = 2) -> tuple[int, ...]:
-        value = self.validate_number(number)
-        bounded_radius = max(0, min(int(radius), 18))
-        index = self._wheel_index[value]
-
-        return tuple(
-            self.WHEEL[(index + offset) % len(self.WHEEL)]
-            for offset in range(-bounded_radius, bounded_radius + 1)
+    def test_neighbors_wrap_around(self) -> None:
+        self.assertEqual(
+            self.engine.get_neighbors(0, 2),
+            (3, 26, 0, 32, 15),
         )
 
-    @staticmethod
-    def recency_weights(length: int, decay: float) -> tuple[float, ...]:
-        if length <= 0:
-            return ()
+    def test_radius_is_bounded(self) -> None:
+        self.assertEqual(len(self.engine.get_neighbors(0, 100)), 37)
 
-        bounded_decay = min(max(float(decay), 0.50), 0.999)
-
-        return tuple(
-            bounded_decay ** (length - 1 - index)
-            for index in range(length)
+    def test_effective_sample_size(self) -> None:
+        self.assertAlmostEqual(
+            self.engine.effective_sample_size([1, 1, 1, 1]),
+            4.0,
         )
 
-    @staticmethod
-    def effective_sample_size(weights: Sequence[float]) -> float:
-        total = sum(weights)
-        squared_total = sum(weight * weight for weight in weights)
+    def test_uniform_wheel_has_no_sector_size_bias(self) -> None:
+        statistics = self.engine.sector_statistics(list(self.engine.WHEEL), decay=0.999)
 
-        if squared_total == 0:
-            return 0.0
-
-        return total * total / squared_total
-
-    def sector_statistics(
-        self,
-        history: Sequence[int],
-        decay: float = 0.90,
-    ) -> dict[str, dict[str, float]]:
-        clean = self.sanitize_history(history)
-        weights = self.recency_weights(len(clean), decay)
-        total_weight = sum(weights)
-        effective_n = self.effective_sample_size(weights)
-
-        statistics: dict[str, dict[str, float]] = {}
-
-        for sector, numbers in self.SECTORS.items():
-            sector_set = set(numbers)
-            observed_weight = sum(
-                weight
-                for number, weight in zip(clean, weights)
-                if number in sector_set
+        for values in statistics.values():
+            self.assertAlmostEqual(
+                values["observed_share_pct"],
+                values["expected_share_pct"],
+                delta=0.2,
             )
 
-            observed_share = observed_weight / total_weight if total_weight else 0.0
-            expected_share = len(numbers) / 37
-
-            if effective_n > 0:
-                standard_error = sqrt(
-                    expected_share * (1 - expected_share) / effective_n
-                )
-            else:
-                standard_error = 0.0
-
-            z_score = (
-                (observed_share - expected_share) / standard_error
-                if standard_error > 0
-                else 0.0
+    def test_signal_requires_minimum_sample(self) -> None:
+        self.assertIsNone(
+            self.engine.build_signal(
+                list(range(self.engine.MINIMUM_SAMPLE - 1))
             )
-
-            statistics[sector] = {
-                "observed_share_pct": observed_share * 100,
-                "expected_share_pct": expected_share * 100,
-                "z_score": z_score,
-                "effective_sample_size": effective_n,
-            }
-
-        return statistics
-
-    def _choose_target_sector(
-        self,
-        history: Sequence[int],
-        decay: float,
-    ) -> tuple[str, dict[str, dict[str, float]]]:
-        statistics = self.sector_statistics(history, decay)
-        sector_order = tuple(self.SECTORS)
-
-        target = max(
-            sector_order,
-            key=lambda sector: (
-                statistics[sector]["z_score"],
-                statistics[sector]["observed_share_pct"]
-                - statistics[sector]["expected_share_pct"],
-                -sector_order.index(sector),
-            ),
         )
 
-        return target, statistics
-
-    def _choose_epicenter(
-        self,
-        history: Sequence[int],
-        target_sector: str,
-        decay: float,
-        neighbor_radius: int,
-    ) -> int:
-        weights = self.recency_weights(len(history), decay)
-        candidate_numbers = self.SECTORS[target_sector]
-
-        best_number = candidate_numbers[0]
-        best_cluster_score = float("-inf")
-        best_center_score = float("-inf")
-        recent_positions = {
-            number: index
-            for index, number in enumerate(history)
-        }
-
-        for candidate in candidate_numbers:
-            covered = set(self.get_neighbors(candidate, neighbor_radius))
-            cluster_score = sum(
-                weight
-                for number, weight in zip(history, weights)
-                if number in covered
-            )
-            center_score = sum(
-                weight
-                for number, weight in zip(history, weights)
-                if number == candidate
-            )
-
-            tie_break = recent_positions.get(candidate, -1)
-            current_key = (cluster_score, center_score, tie_break)
-            best_key = (
-                best_cluster_score,
-                best_center_score,
-                recent_positions.get(best_number, -1),
-            )
-
-            if current_key > best_key:
-                best_number = candidate
-                best_cluster_score = cluster_score
-                best_center_score = center_score
-
-        return best_number
-
-    def _raw_signal(
-        self,
-        history: Sequence[int],
-        decay: float,
-        neighbor_radius: int,
-    ) -> tuple[str, int, tuple[int, ...], dict[str, float]]:
-        target_sector, statistics = self._choose_target_sector(history, decay)
-        epicenter = self._choose_epicenter(
-            history,
-            target_sector,
-            decay,
-            neighbor_radius,
-        )
-        covered_numbers = self.get_neighbors(epicenter, neighbor_radius)
-
-        return (
-            target_sector,
-            epicenter,
-            covered_numbers,
-            statistics[target_sector],
+    def test_signal_is_deterministic(self) -> None:
+        history = [
+            0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27,
+            13, 36, 11, 30, 8, 23, 10, 5,
+        ]
+        self.assertEqual(
+            self.engine.build_signal(history),
+            self.engine.build_signal(history),
         )
 
-    @staticmethod
-    def wilson_interval(
-        hits: int,
-        trials: int,
-        z_value: float = 1.96,
-    ) -> tuple[float, float]:
-        if trials <= 0:
-            return 0.0, 100.0
+    def test_backtest_trials(self) -> None:
+        history = list(range(20))
+        result = self.engine.backtest(history)
+        self.assertEqual(result.trials, 8)
 
-        proportion = hits / trials
-        denominator = 1 + z_value * z_value / trials
-        center = (
-            proportion
-            + z_value * z_value / (2 * trials)
-        ) / denominator
-        margin = (
-            z_value
-            * sqrt(
-                proportion * (1 - proportion) / trials
-                + z_value * z_value / (4 * trials * trials)
-            )
-            / denominator
-        )
+    def test_backtest_baseline_matches_coverage(self) -> None:
+        result = self.engine.backtest(list(range(20)), neighbor_radius=2)
+        self.assertAlmostEqual(result.baseline_pct, 5 / 37 * 100)
 
-        return (
-            max(0.0, center - margin) * 100,
-            min(1.0, center + margin) * 100,
-        )
+    def test_wilson_interval_contains_observed_rate(self) -> None:
+        low, high = self.engine.wilson_interval(5, 10)
+        self.assertLessEqual(low, 50)
+        self.assertGreaterEqual(high, 50)
 
-    def backtest(
-        self,
-        history: Sequence[int],
-        decay: float = 0.90,
-        neighbor_radius: int = 2,
-        minimum_training: int | None = None,
-    ) -> BacktestResult:
-        clean = self.sanitize_history(history)
-        training_size = minimum_training or self.MINIMUM_SAMPLE
-        hits = 0
-        trials = 0
 
-        for next_index in range(training_size, len(clean)):
-            training = clean[:next_index]
-            _, _, covered_numbers, _ = self._raw_signal(
-                training,
-                decay,
-                neighbor_radius,
-            )
-
-            hits += int(clean[next_index] in covered_numbers)
-            trials += 1
-
-        coverage_size = len(self.get_neighbors(0, neighbor_radius))
-        baseline_pct = coverage_size / 37 * 100
-        accuracy_pct = hits / trials * 100 if trials else 0.0
-        low_pct, high_pct = self.wilson_interval(hits, trials)
-
-        return BacktestResult(
-            hits=hits,
-            trials=trials,
-            accuracy_pct=accuracy_pct,
-            baseline_pct=baseline_pct,
-            lift_pct_points=accuracy_pct - baseline_pct,
-            wilson_low_pct=low_pct,
-            wilson_high_pct=high_pct,
-        )
-
-    @staticmethod
-    def _evidence_score(
-        sample_size: int,
-        effective_sample_size: float,
-        sector_z_score: float,
-        backtest: BacktestResult,
-    ) -> tuple[float, str]:
-        sample_component = min(effective_sample_size / 45, 1.0) * 30
-        sector_component = min(max(sector_z_score, 0.0) / 3.0, 1.0) * 30
-
-        conservative_lift = max(
-            backtest.wilson_low_pct - backtest.baseline_pct,
-            0.0,
-        )
-        backtest_component = min(conservative_lift / 12, 1.0) * 40
-
-        # Sem tentativas walk-forward, o score é mantido necessariamente baixo.
-        if backtest.trials == 0:
-            backtest_component = 0.0
-            sample_component = min(sample_component, 15.0)
-
-        score = min(
-            sample_component + sector_component + backtest_component,
-            100.0,
-        )
-
-        if score >= 70:
-            label = "Forte"
-        elif score >= 45:
-            label = "Moderada"
-        else:
-            label = "Fraca"
-
-        return score, label
-
-    def build_signal(
-        self,
-        history: Sequence[int],
-        decay: float = 0.90,
-        neighbor_radius: int = 2,
-    ) -> SignalResult | None:
-        clean = self.sanitize_history(history)
-
-        if len(clean) < self.MINIMUM_SAMPLE:
-            return None
-
-        (
-            target_sector,
-            epicenter,
-            covered_numbers,
-            target_statistics,
-        ) = self._raw_signal(
-            clean,
-            decay,
-            neighbor_radius,
-        )
-
-        backtest = self.backtest(
-            clean,
-            decay,
-            neighbor_radius,
-        )
-
-        evidence_score, evidence_label = self._evidence_score(
-            sample_size=len(clean),
-            effective_sample_size=target_statistics["effective_sample_size"],
-            sector_z_score=target_statistics["z_score"],
-            backtest=backtest,
-        )
-
-        explanation = (
-            f"{target_sector} representa "
-            f"{target_statistics['observed_share_pct']:.1f}% do peso recente, "
-            f"contra {target_statistics['expected_share_pct']:.1f}% pela dimensão "
-            f"do setor. O epicentro {epicenter} maximiza a concentração ponderada "
-            "na vizinhança física configurada."
-        )
-
-        return SignalResult(
-            target_sector=target_sector,
-            epicenter=epicenter,
-            covered_numbers=covered_numbers,
-            sector_share_pct=target_statistics["observed_share_pct"],
-            sector_expected_pct=target_statistics["expected_share_pct"],
-            sector_z_score=target_statistics["z_score"],
-            evidence_score=evidence_score,
-            evidence_label=evidence_label,
-            backtest=backtest,
-            sample_size=len(clean),
-            effective_sample_size=target_statistics["effective_sample_size"],
-            explanation=explanation,
-        )
+if __name__ == "__main__":
+    unittest.main()
