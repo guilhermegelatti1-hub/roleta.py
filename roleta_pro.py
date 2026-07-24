@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from html import escape
+from textwrap import dedent
 import re
 
 import pandas as pd
@@ -10,7 +11,6 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from roulette_engine import EuropeanRouletteEngine, SignalResult
-
 
 # ==========================================================
 # CONFIGURAÇÃO DA PÁGINA
