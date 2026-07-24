@@ -1,245 +1,534 @@
-import streamlit as st
-import pandas as pd
-import plotly.express as px
+from __future__ import annotations
+
 from collections import Counter
+from html import escape
 import re
 
-# ==========================================
-# 1. MOTOR MEGA ROULETTE (Com Previsão Algorítmica)
-# ==========================================
-class MegaRouletteEngine:
-    def __init__(self):
-        # A ordem física exata da roleta
-        self.RODA = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 
-                     5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
-        
-        # Mapeamento da roleta nos 4 lados principais
-        self.SETORES_PLENOS = {
-            "Jeu Zéro": [12, 35, 3, 26, 0, 32, 15],
-            "Voisins": [22, 18, 29, 7, 28, 19, 4, 21, 2, 25],
-            "Orphelins": [1, 20, 14, 31, 9, 6, 34, 17],
-            "Tiers": [27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33]
-        }
-        self.JEU_ZERO = set(self.SETORES_PLENOS["Jeu Zéro"])
-        self.VOISINS = set(self.SETORES_PLENOS["Voisins"])
-        self.ORPHELINS = set(self.SETORES_PLENOS["Orphelins"])
-        self.TIERS = set(self.SETORES_PLENOS["Tiers"])
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
 
-    def obter_cor(self, n):
-        n = int(n)
-        if n == 0: return "Verde"
-        vermelhos = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
-        return "Vermelho" if n in vermelhos else "Preto"
+from roulette_engine import EuropeanRouletteEngine, SignalResult
 
-    def classificar_setor_pista(self, n):
-        """Identifica em qual dos 4 lados da roleta o número se encontra"""
-        n = int(n)
-        if n in self.JEU_ZERO: return "Jeu Zéro"
-        if n in self.VOISINS: return "Voisins"
-        if n in self.ORPHELINS: return "Orphelins"
-        if n in self.TIERS: return "Tiers"
-        return "Erro"
 
-    def obter_zona_vizinhos(self, n):
-        """Retorna o número e os seus 2 vizinhos de cada lado (zona de 5 números)"""
-        n = int(n)
-        if n not in self.RODA: return []
-        idx = self.RODA.index(n)
-        return [self.RODA[(idx + i) % 37] for i in range(-2, 3)]
+st.set_page_config(
+    page_title="Roulette Lens",
+    page_icon="🎯",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-    def prever_proxima_jogada(self, historico):
-        """
-        Identifica os números e setores para definir uma jogada preditiva com 2 vizinhos.
-        Lógica extraída da análise de padrões da roda.
-        """
-        if len(historico) < 5:
-            return None, None, []
-            
-        # 1. Identificar os setores do histórico recente
-        setores = [self.classificar_setor_pista(n) for n in historico if self.classificar_setor_pista(n) != "Erro"]
-        if not setores:
-            return None, None, []
-            
-        # 2. Descobrir qual é o Setor/Tier que está a favorecer
-        setor_alvo = Counter(setores).most_common(1)[0][0]
-        
-        # 3. Filtrar apenas os números que saíram DENTRO desse setor alvo
-        numeros_no_setor = [n for n in historico if self.classificar_setor_pista(n) == setor_alvo]
-        
-        # 4. Encontrar o número mais repetido desse setor (o nosso "epicentro")
-        if numeros_no_setor:
-            numero_epicentro = Counter(numeros_no_setor).most_common(1)[0][0]
-        else:
-            numero_epicentro = historico[-1] # Fallback de segurança
-            
-        # 5. Definir a jogada com o número alvo + 2 vizinhos físicos
-        jogada_preditiva = self.obter_zona_vizinhos(numero_epicentro)
-        
-        return setor_alvo, numero_epicentro, jogada_preditiva
+engine = EuropeanRouletteEngine()
 
-# ==========================================
-# 2. INICIALIZAÇÃO DA APP E CSS
-# ==========================================
-st.set_page_config(page_title="Tracker Mega Roulette", layout="wide", initial_sidebar_state="expanded")
+if "history" not in st.session_state:
+    st.session_state.history = []
 
-engine = MegaRouletteEngine()
 
-# Inicializa o histórico na memória da sessão
-if 'historico_quant' not in st.session_state:
-    st.session_state.historico_quant = []
+def add_number(number: int) -> None:
+    st.session_state.history.append(number)
+    st.session_state.history = st.session_state.history[-500:]
 
-# Estilos Visuais para as Caixas
-st.markdown("""
+
+def submit_text_input() -> None:
+    raw = st.session_state.get("quick_input", "")
+    numbers = [int(value) for value in re.findall(r"(?<!\d)(?:[0-9]|[12][0-9]|3[0-6])(?!\d)", raw)]
+    for number in numbers:
+        add_number(number)
+    st.session_state.quick_input = ""
+
+
+def number_badge(number: int) -> str:
+    color = engine.get_color(number)
+    css_class = {
+        "Vermelho": "ball-red",
+        "Preto": "ball-black",
+        "Verde": "ball-green",
+    }[color]
+    return f"<span class='number-ball {css_class}'>{number}</span>"
+
+
+def render_signal_card(signal: SignalResult) -> None:
+    confidence_class = {
+        "Alta": "confidence-high",
+        "Média": "confidence-medium",
+        "Baixa": "confidence-low",
+        "Insuficiente": "confidence-low",
+    }[signal.confidence_label]
+
+    covered = "".join(number_badge(number) for number in signal.covered_numbers)
+    st.markdown(
+        f"""
+        <section class="signal-card">
+            <div class="eyebrow">SINAL ESTATÍSTICO</div>
+            <div class="signal-header">
+                <div>
+                    <h2>{escape(signal.target_sector)}</h2>
+                    <p>Epicentro físico: <strong>{signal.epicenter}</strong></p>
+                </div>
+                <span class="confidence-pill {confidence_class}">
+                    Confiança {escape(signal.confidence_label)}
+                </span>
+            </div>
+            <div class="ball-row">{covered}</div>
+            <div class="signal-grid">
+                <div><span>Pontuação</span><strong>{signal.score:.1f}%</strong></div>
+                <div><span>Backtest</span><strong>{signal.backtest_accuracy:.1f}%</strong></div>
+                <div><span>Amostra</span><strong>{signal.sample_size}</strong></div>
+            </div>
+            <p class="signal-note">{escape(signal.explanation)}</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+st.markdown(
+    """
     <style>
-    .mega-box-global { padding: 20px; border-radius: 10px; background: linear-gradient(135deg, #1f4037 0%, #99f2c8 100%); color: black; text-align: center; font-weight: bold; border: 2px solid white;}
-    .mega-box-recente { padding: 25px; border-radius: 15px; background: linear-gradient(135deg, #4A00E0 0%, #8E2DE2 100%); color: white; text-align: center; font-weight: bold; border: 3px solid #FFD700; box-shadow: 0px 4px 15px rgba(255, 215, 0, 0.5);}
-    .historico-scroll { max-height: 250px; overflow-y: auto; padding: 15px; background-color: #111111; border-radius: 8px; border: 1px solid #333; font-size: 16px; line-height: 1.8;}
-    div[data-testid="stSidebar"] button { font-weight: bold; height: 50px; margin-bottom: 5px; }
-    </style>
-""", unsafe_allow_html=True)
+    :root {
+        --bg: #07111f;
+        --surface: rgba(15, 28, 46, 0.88);
+        --surface-2: rgba(20, 39, 63, 0.94);
+        --border: rgba(148, 163, 184, 0.18);
+        --text: #edf6ff;
+        --muted: #9eb0c4;
+        --accent: #41d9b5;
+        --accent-2: #77a7ff;
+        --gold: #f5c76b;
+        --danger: #ff6577;
+    }
 
-# ==========================================
-# 3. BARRA LATERAL (ENTRADA DE DADOS E CONTROLOS)
-# ==========================================
-def submeter_texto_rapido():
-    entrada = st.session_state.input_texto_rapido
-    if entrada:
-        numeros = re.findall(r'\b([0-9]|[1-2][0-9]|3[0-6])\b', entrada)
-        if numeros:
-            st.session_state.historico_quant.extend([int(n) for n in numeros])
-            # Mantemos o limite de segurança de 500
-            if len(st.session_state.historico_quant) > 500:
-                st.session_state.historico_quant = st.session_state.historico_quant[-500:]
-        st.session_state.input_texto_rapido = "" 
+    .stApp {
+        background:
+            radial-gradient(circle at 15% 10%, rgba(65, 217, 181, 0.12), transparent 32rem),
+            radial-gradient(circle at 88% 18%, rgba(119, 167, 255, 0.11), transparent 28rem),
+            linear-gradient(145deg, #050b14 0%, var(--bg) 55%, #081425 100%);
+        color: var(--text);
+    }
+
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #081321 0%, #0c1b2d 100%);
+        border-right: 1px solid var(--border);
+    }
+
+    [data-testid="stMetric"] {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 16px 18px;
+        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.18);
+    }
+
+    .hero {
+        padding: 28px 30px;
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        background:
+            linear-gradient(120deg, rgba(65, 217, 181, 0.13), rgba(119, 167, 255, 0.08)),
+            var(--surface);
+        box-shadow: 0 22px 55px rgba(0, 0, 0, 0.22);
+        margin-bottom: 22px;
+    }
+
+    .hero h1 {
+        font-size: clamp(2.1rem, 4vw, 3.7rem);
+        margin: 0;
+        letter-spacing: -0.05em;
+    }
+
+    .hero p {
+        max-width: 780px;
+        color: var(--muted);
+        font-size: 1.05rem;
+        margin: 12px 0 0;
+    }
+
+    .eyebrow {
+        color: var(--accent);
+        font-size: 0.74rem;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+        margin-bottom: 8px;
+    }
+
+    .signal-card {
+        min-height: 360px;
+        padding: 26px;
+        border: 1px solid rgba(65, 217, 181, 0.28);
+        border-radius: 24px;
+        background:
+            linear-gradient(145deg, rgba(65, 217, 181, 0.14), rgba(119, 167, 255, 0.06)),
+            var(--surface-2);
+        box-shadow: 0 22px 55px rgba(0, 0, 0, 0.25);
+    }
+
+    .signal-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        align-items: flex-start;
+    }
+
+    .signal-header h2 {
+        margin: 0;
+        font-size: 2rem;
+    }
+
+    .signal-header p, .signal-note {
+        color: var(--muted);
+    }
+
+    .confidence-pill {
+        display: inline-flex;
+        align-items: center;
+        white-space: nowrap;
+        padding: 8px 12px;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 800;
+    }
+
+    .confidence-high { background: rgba(65, 217, 181, 0.16); color: #7ff4d8; }
+    .confidence-medium { background: rgba(245, 199, 107, 0.16); color: #ffe09d; }
+    .confidence-low { background: rgba(255, 101, 119, 0.14); color: #ff9baa; }
+
+    .ball-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 24px 0;
+    }
+
+    .number-ball {
+        display: inline-flex;
+        width: 48px;
+        height: 48px;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        font-weight: 900;
+        border: 2px solid rgba(255,255,255,.28);
+        box-shadow: inset 0 0 0 2px rgba(0,0,0,.16), 0 8px 20px rgba(0,0,0,.25);
+    }
+
+    .ball-red { background: linear-gradient(145deg, #ed334e, #9f142a); color: white; }
+    .ball-black { background: linear-gradient(145deg, #293648, #080c12); color: white; }
+    .ball-green { background: linear-gradient(145deg, #31c68c, #087451); color: white; }
+
+    .signal-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin: 12px 0 20px;
+    }
+
+    .signal-grid div, .panel {
+        background: rgba(7, 17, 31, 0.64);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 14px;
+    }
+
+    .signal-grid span {
+        display: block;
+        color: var(--muted);
+        font-size: 0.76rem;
+        margin-bottom: 4px;
+    }
+
+    .signal-grid strong {
+        font-size: 1.2rem;
+    }
+
+    .history-box {
+        max-height: 230px;
+        overflow-y: auto;
+        padding: 14px;
+        border-radius: 16px;
+        background: rgba(3, 9, 17, 0.66);
+        border: 1px solid var(--border);
+        line-height: 2.5;
+    }
+
+    .disclaimer {
+        margin-top: 18px;
+        padding: 13px 16px;
+        border-left: 3px solid var(--gold);
+        border-radius: 8px;
+        background: rgba(245, 199, 107, 0.08);
+        color: #d8c79f;
+        font-size: 0.9rem;
+    }
+
+    div.stButton > button {
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        transition: transform .15s ease, border-color .15s ease;
+    }
+
+    div.stButton > button:hover {
+        transform: translateY(-1px);
+        border-color: rgba(65, 217, 181, .55);
+    }
+
+    @media (max-width: 760px) {
+        .signal-grid { grid-template-columns: 1fr; }
+        .signal-header { flex-direction: column; }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 with st.sidebar:
-    st.title("⚡ Mega Roulette")
-    st.write("📈 **Parâmetros de Análise:**")
-    
-    # Sliders dinâmicos para controlo de janelas de histórico
-    janela_global = st.slider("Tamanho do Histórico Global", min_value=10, max_value=100, value=20, help="Quantas jogadas analisar para ver os 4 lados (recomendado: 20).")
-    janela_recente = st.slider("Tamanho do Ciclo Curto", min_value=3, max_value=15, value=5, help="Quantos números usar para procurar o ciclo e fazer a previsão.")
-    
+    st.markdown("## 🎯 Roulette Lens")
+    st.caption("Leitura estatística da roleta europeia")
+
+    analysis_window = st.slider(
+        "Janela de análise",
+        min_value=12,
+        max_value=120,
+        value=36,
+        help="Quantidade de resultados recentes usada no sinal.",
+    )
+    decay = st.slider(
+        "Peso da recência",
+        min_value=0.75,
+        max_value=0.98,
+        value=0.90,
+        step=0.01,
+        help="Valores menores dão mais peso às jogadas recentes.",
+    )
+    neighbor_radius = st.select_slider(
+        "Cobertura de vizinhos",
+        options=[1, 2, 3],
+        value=2,
+        help="Quantidade de vizinhos físicos de cada lado do epicentro.",
+    )
+
     st.divider()
+    keyboard_tab, text_tab = st.tabs(["Mesa", "Texto"])
 
-    aba_teclado, aba_texto = st.tabs(["🎛️ Teclado", "⌨️ Texto"])
-    
-    with aba_teclado:
-        def add_num(n):
-            st.session_state.historico_quant.append(n)
-            if len(st.session_state.historico_quant) > 500:
-                st.session_state.historico_quant = st.session_state.historico_quant[-500:]
+    with keyboard_tab:
+        if st.button("0 🟢", use_container_width=True, key="number_0"):
+            add_number(0)
+            st.rerun()
 
-        if st.button("0 🟢", use_container_width=True): add_num(0)
         for row in range(12):
-            c1, c2, c3 = st.columns(3)
-            n1, n2, n3 = row * 3 + 1, row * 3 + 2, row * 3 + 3
-            def btn_label(num): return f"{num} 🔴" if engine.obter_cor(num) == "Vermelho" else f"{num} ⚫"
-            with c1: 
-                if st.button(btn_label(n1), use_container_width=True, key=f"btn_{n1}"): add_num(n1)
-            with c2: 
-                if st.button(btn_label(n2), use_container_width=True, key=f"btn_{n2}"): add_num(n2)
-            with c3: 
-                if st.button(btn_label(n3), use_container_width=True, key=f"btn_{n3}"): add_num(n3)
+            columns = st.columns(3)
+            for offset, column in enumerate(columns, start=1):
+                number = row * 3 + offset
+                icon = "🔴" if engine.get_color(number) == "Vermelho" else "⚫"
+                with column:
+                    if st.button(
+                        f"{number} {icon}",
+                        use_container_width=True,
+                        key=f"number_{number}",
+                    ):
+                        add_number(number)
+                        st.rerun()
 
-    with aba_texto:
-        st.text_input("Cola os números:", key="input_texto_rapido", on_change=submeter_texto_rapido)
+    with text_tab:
+        st.text_input(
+            "Cole uma sequência",
+            key="quick_input",
+            placeholder="Ex.: 17, 0, 32, 21, 8",
+            on_change=submit_text_input,
+        )
+        st.caption("Aceita números de 0 a 36 separados por espaço, vírgula ou quebra de linha.")
 
     st.divider()
-    
-    st.markdown("### 📜 Histórico")
-    if len(st.session_state.historico_quant) > 0:
-        hist = [f"**{n}**" for n in st.session_state.historico_quant]
-        st.markdown(f"<div class='historico-scroll'>{' ➔ '.join(hist)}</div>", unsafe_allow_html=True)
-        st.caption(f"Registados: {len(st.session_state.historico_quant)} jogadas")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("↩️ Desfazer", use_container_width=True):
-                st.session_state.historico_quant.pop()
+    st.markdown("### Histórico")
+
+    if st.session_state.history:
+        recent_badges = " ".join(number_badge(number) for number in st.session_state.history[-60:])
+        st.markdown(f"<div class='history-box'>{recent_badges}</div>", unsafe_allow_html=True)
+        st.caption(f"{len(st.session_state.history)} resultados registrados")
+
+        undo_col, clear_col = st.columns(2)
+        with undo_col:
+            if st.button("↩ Desfazer", use_container_width=True):
+                st.session_state.history.pop()
                 st.rerun()
-        with col2:
-            if st.button("🚨 Limpar Tudo", type="primary", use_container_width=True):
-                st.session_state.historico_quant = []
+        with clear_col:
+            if st.button("Limpar", type="primary", use_container_width=True):
+                st.session_state.history = []
                 st.rerun()
     else:
-        st.info("Aguardando sorteios...")
+        st.info("Adicione resultados para iniciar.")
 
-# ==========================================
-# 4. DASHBOARD (ANÁLISE E PREVISÃO)
-# ==========================================
-historico_completo = st.session_state.historico_quant
-n_jogadas = len(historico_completo)
+st.markdown(
+    """
+    <section class="hero">
+        <div class="eyebrow">EUROPEAN ROULETTE ANALYTICS</div>
+        <h1>Roulette Lens</h1>
+        <p>
+            Um painel mais limpo e auditável para visualizar frequência, setores físicos,
+            recência e desempenho histórico dos sinais.
+        </p>
+    </section>
+    """,
+    unsafe_allow_html=True,
+)
 
-st.title("🎯 Radares de Zona e Previsão")
+history = st.session_state.history
+total_spins = len(history)
 
-if n_jogadas < 5:
-    st.warning("Insere pelo menos 5 números para iniciar a análise de previsão.")
-else:
-    # Preparação das listas fatiadas baseadas nos sliders
-    historico_global_atual = historico_completo[-janela_global:]
-    setores_global = [engine.classificar_setor_pista(n) for n in historico_global_atual if engine.classificar_setor_pista(n) != "Erro"]
-    
-    historico_recente = historico_completo[-janela_recente:]
-    
-    col_recente, col_global = st.columns(2)
-    
-    with col_recente:
-        st.markdown("### 🔮 PREVISÃO ALGORÍTMICA")
-        st.caption(f"Baseado na tendência das últimas {len(historico_recente)} jogadas.")
-        
-        # O Motor corre a lógica de previsão com base na janela recente
-        setor_alvo, epicentro, jogada_preditiva = engine.prever_proxima_jogada(historico_recente)
-        
-        if setor_alvo and jogada_preditiva:
-            st.markdown(f"""
-            <div class='mega-box-recente'>
-                ALVO DO SISTEMA: {setor_alvo.upper()}<br>
-                <i>O padrão favorece o número {epicentro}. Cobre o epicentro + 2 vizinhos.</i><br><br>
-                <h3 style='color: white;'>{jogada_preditiva}</h3>
-                <p style='color: #FFD700; font-size: 14px;'>Custo da ronda: 5 fichas</p>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.info("A aguardar dados suficientes no ciclo curto para previsão.")
-            
-    with col_global:
-        st.markdown("### 📊 ZONA DOMINANTE (4 LADOS)")
-        st.caption(f"Análise focada nos últimos {len(historico_global_atual)} números registados.")
-        
-        contagem_global = Counter(setores_global)
-        if contagem_global:
-            setor_hot_global = contagem_global.most_common(1)[0][0]
-            prob_global = (contagem_global[setor_hot_global] / len(setores_global)) * 100
-            nums_global = engine.SETORES_PLENOS[setor_hot_global]
-            
-            st.markdown(f"""
-            <div class='mega-box-global'>
-                O LADO MAIS QUENTE DA MESA: {setor_hot_global.upper()}<br>
-                <i>Caiu neste quadrante {prob_global:.0f}% das vezes (amostra de {len(historico_global_atual)}).</i><br><br>
-                <h4>{nums_global}</h4>
-            </div>
-            """, unsafe_allow_html=True)
+if total_spins == 0:
+    st.info("Comece adicionando os resultados no painel lateral.")
+    st.stop()
 
-    st.divider()
+current_window = history[-analysis_window:]
+signal = engine.build_signal(
+    current_window,
+    decay=decay,
+    neighbor_radius=neighbor_radius,
+)
 
-    # Gráficos e Auditoria Visual
-    aba1, aba2 = st.tabs([f"Estatística dos 4 Lados (Últimos {len(historico_global_atual)})", "Histórico de Repetição de Lados"])
-    
-    with aba1:
-        if contagem_global:
-            fig_glob = px.pie(names=list(contagem_global.keys()), values=list(contagem_global.values()), hole=0.5,
-                              color_discrete_sequence=["#FF851B", "#0074D9", "#2ECC40", "#B10DC9"])
-            fig_glob.update_layout(template="plotly_dark", title=f"Distribuição da Roda (Janela de {len(historico_global_atual)})")
-            st.plotly_chart(fig_glob, use_container_width=True)
-        else:
-            st.write("Sem dados suficientes para o gráfico.")
-            
-    with aba2:
-        if setores_global:
-            st.write("Mapa em tempo real das quedas de bola, classificado pelos 4 grandes setores da roda.")
-            df_setores = pd.DataFrame({"Jogada": range(1, len(setores_global) + 1), "Lado da Roleta": setores_global})
-            fig_linha = px.scatter(df_setores, x="Jogada", y="Lado da Roleta", color="Lado da Roleta")
-            fig_linha.update_layout(template="plotly_dark", title="Mapa de Calor de Repetição")
-            st.plotly_chart(fig_linha, use_container_width=True)
-        else:
-            st.write("Sem dados suficientes para o gráfico.")
+red_count = sum(engine.get_color(number) == "Vermelho" for number in current_window)
+black_count = sum(engine.get_color(number) == "Preto" for number in current_window)
+zero_count = current_window.count(0)
+
+metric_cols = st.columns(4)
+metric_cols[0].metric("Resultados", total_spins)
+metric_cols[1].metric("Janela ativa", len(current_window))
+metric_cols[2].metric("Vermelho / Preto", f"{red_count} / {black_count}")
+metric_cols[3].metric("Zeros", zero_count)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+left_col, right_col = st.columns([1.16, 0.84], gap="large")
+
+with left_col:
+    if signal:
+        render_signal_card(signal)
+    else:
+        st.warning("São necessários pelo menos 8 resultados válidos para gerar um sinal.")
+
+with right_col:
+    sector_counts = Counter(engine.get_sector(number) for number in current_window)
+    sector_names = list(engine.SECTORS)
+    sector_values = [sector_counts.get(name, 0) for name in sector_names]
+
+    fig_sector = go.Figure(
+        go.Bar(
+            x=sector_values,
+            y=sector_names,
+            orientation="h",
+            text=sector_values,
+            textposition="auto",
+            marker=dict(
+                color=["#41d9b5", "#77a7ff", "#f5c76b", "#d17cff"],
+                line=dict(width=0),
+            ),
+        )
+    )
+    fig_sector.update_layout(
+        title="Distribuição por setor",
+        template="plotly_dark",
+        height=360,
+        margin=dict(l=10, r=10, t=55, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis_title="Ocorrências",
+        yaxis_title="",
+        showlegend=False,
+    )
+    st.plotly_chart(fig_sector, use_container_width=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+tab_overview, tab_numbers, tab_audit = st.tabs(
+    ["Visão geral", "Números", "Auditoria do sinal"]
+)
+
+with tab_overview:
+    timeline = pd.DataFrame(
+        {
+            "Jogada": range(max(1, total_spins - len(current_window) + 1), total_spins + 1),
+            "Número": current_window,
+            "Setor": [engine.get_sector(number) for number in current_window],
+            "Cor": [engine.get_color(number) for number in current_window],
+        }
+    )
+    fig_timeline = px.scatter(
+        timeline,
+        x="Jogada",
+        y="Setor",
+        color="Cor",
+        hover_data=["Número"],
+        color_discrete_map={
+            "Vermelho": "#ed334e",
+            "Preto": "#9aa8b7",
+            "Verde": "#41d9b5",
+        },
+    )
+    fig_timeline.update_traces(marker=dict(size=11, line=dict(width=1, color="white")))
+    fig_timeline.update_layout(
+        template="plotly_dark",
+        height=390,
+        title="Sequência recente por setor",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend_title_text="Cor",
+    )
+    st.plotly_chart(fig_timeline, use_container_width=True)
+
+with tab_numbers:
+    frequency = Counter(current_window)
+    number_df = pd.DataFrame(
+        {
+            "Número": list(range(37)),
+            "Ocorrências": [frequency.get(number, 0) for number in range(37)],
+            "Cor": [engine.get_color(number) for number in range(37)],
+            "Setor": [engine.get_sector(number) for number in range(37)],
+        }
+    ).sort_values(["Ocorrências", "Número"], ascending=[False, True])
+
+    st.dataframe(
+        number_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Número": st.column_config.NumberColumn(format="%d"),
+            "Ocorrências": st.column_config.ProgressColumn(
+                min_value=0,
+                max_value=max(1, number_df["Ocorrências"].max()),
+            ),
+        },
+    )
+
+with tab_audit:
+    if signal:
+        baseline = len(signal.covered_numbers) / 37 * 100
+        audit_cols = st.columns(3)
+        audit_cols[0].metric("Taxa do backtest", f"{signal.backtest_accuracy:.1f}%")
+        audit_cols[1].metric("Cobertura teórica", f"{baseline:.1f}%")
+        audit_cols[2].metric(
+            "Diferença observada",
+            f"{signal.backtest_accuracy - baseline:+.1f} p.p.",
+        )
+
+        st.write(
+            "O backtest percorre o histórico sem olhar o resultado seguinte, "
+            "gera o sinal com os dados disponíveis naquele momento e mede se a "
+            "próxima jogada caiu na cobertura."
+        )
+        st.progress(min(signal.confidence_score / 100, 1.0))
+        st.caption(
+            f"Índice de confiança: {signal.confidence_score:.1f}/100. "
+            "Quanto maior a amostra e mais consistente o backtest, maior o índice."
+        )
+    else:
+        st.info("Adicione mais resultados para liberar a auditoria.")
+
+st.markdown(
+    """
+    <div class="disclaimer">
+        <strong>Importante:</strong> resultados de roleta são independentes e aleatórios.
+        Este painel descreve o histórico; ele não garante vantagem, lucro ou previsão do próximo giro.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
